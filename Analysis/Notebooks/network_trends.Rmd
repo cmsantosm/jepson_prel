@@ -1,0 +1,237 @@
+---
+title: "vOTU network patterns"
+author: "Christian Santos-Medellin"
+---
+
+This notebook is a very preliminary analysis visually exploring the vOTU distributions in the vcontact network across treatments
+
+Load libraries
+```{r}
+source("../../General/general_functions.R")
+source("../../General/plotting_parameters.R")
+library(lubridate)
+library(tidyverse)
+```
+
+Read files
+```{r}
+climate <- read.table("../Data/climate.tsv", header = T, sep = "\t") %>% 
+  mutate(Date = mdy(Date))
+
+soil.map <- readRDS("../Data/soil_map.RDS") %>% 
+  mutate(GSM = GSM*100) %>% 
+  mutate(GSM_max = ifelse(GSM > 30, 30, GSM)) %>% 
+  filter(Study == "Temporal")
+
+v.map <- readRDS("../Data/dna_map.RDS") %>% 
+  mutate(SampleID = DNAID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat, GSM_max), by = "SoilID") %>% 
+  filter(Study == "Temporal")
+
+b.map <- readRDS("../Data/dna_map.RDS") %>% 
+  mutate(SampleID = AmpliconID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat, GSM_max), by = "SoilID") %>% 
+  filter(Study == "Temporal")
+
+votu <- readRDS("../Data/rare_min_votu75_tmean.RDS")
+votu <- votu[, colSums(votu) > 0]
+votu <- votu[rowSums(votu) > 0, ]
+
+asv <- readRDS("../Data/amplicon_raremin_nsing_asv.RDS")
+asv <- asv[, colSums(asv) > 0]
+asv <- asv[rowSums(asv) > 0, ]
+
+extra.vars <- c("Lime", "Texture", "lbs", "H_Sat", "pH_Buffer", "Ca_Sat", "K_Sat", "Na_Sat", "Mg_Sat")
+
+soil.mtx <- soil.map %>% 
+  filter(Study == "Temporal") %>% 
+  filter(ProfileWard) %>% 
+  select(SoilID, pH_Soil:Na_Sat) %>% 
+  select(-extra.vars) %>% 
+  as.data.frame(row.names = .$SoilID) %>% 
+  select(-SoilID) %>% 
+  as.matrix()
+
+timepoint.levels <- soil.map %>% filter(str_detect(Timepoint, "T")) %>% .$Timepoint %>% sort() %>% unique()
+
+swale.nodes <- readRDS("../Data/swale_ntwk_filt_nodes_rare_min_votu75.RDS")
+swale.edges <- readRDS("../Data/swale_ntwk_filt_edges_rare_min_votu75.RDS")
+mound.nodes <- readRDS("../Data/mound_ntwk_filt_nodes_rare_min_votu75.RDS")
+mound.edges <- readRDS("../Data/mound_ntwk_filt_edges_rare_min_votu75.RDS")
+
+iphop <- readRDS("../Data/iphop_genome_aggregated.RDS") %>% rename("OTU_ID" = "Virus")
+```
+
+Generate the subsets of viromes and amplicon profiles for different analyses
+```{r}
+# All viromes generated from fresh soils + the subset of viromes from frozen soils from time points with no associated fresh soil profile
+good.viromes <- v.map %>% 
+  filter(!is.na(WGSID)) %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(Fraction == "Viral") %>% 
+  filter(Study == "Temporal") %>% 
+  filter(SampleID %in% colnames(votu)) %>% 
+  select(SoilID, WGSID, DNase) %>% 
+  mutate(DNase = ifelse(DNase, "Yes", "No")) %>% 
+  spread(key = DNase, value = WGSID) %>% 
+  mutate(SampleID = ifelse(is.na(Yes), No, Yes)) %>% 
+  .$SampleID
+
+# All viromes generated from fresh soils
+dnase.viromes <- v.map %>% 
+  filter(!is.na(WGSID)) %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(Fraction == "Viral") %>% 
+  filter(DNase) %>% 
+  filter(SampleID %in% colnames(votu)) %>% 
+  .$SampleID
+```
+
+Mound analysis
+Inspect if there are obvious differences in the distribution of vOTUs identified in each mound
+```{r}
+votu %>% 
+  tidy_otu() %>% 
+  filter(Count > 0) %>% 
+  inner_join(select(v.map, SampleID, Position, Location), by = "SampleID") %>% 
+  filter(SampleID %in% good.viromes) %>% 
+  filter(Position == "Top") %>% 
+  select(OTU_ID, Location) %>% 
+  distinct() %>% 
+  inner_join(mound.nodes, by = c("OTU_ID" = "Genome")) %>% 
+  ggplot(aes(x,y)) +
+  geom_point(alpha = 0.1) +
+  facet_grid(. ~ Location) +
+  theme_void()
+```
+
+Inspect if there are obvious differences in the distribution of vOTUs identified in each time point
+```{r}
+votu %>% 
+  tidy_otu() %>% 
+  filter(Count > 0) %>% 
+  inner_join(select(v.map, SampleID, Position, Timepoint), by = "SampleID") %>% 
+  filter(SampleID %in% good.viromes) %>% 
+  filter(Position == "Top") %>% 
+  select(OTU_ID, Timepoint) %>% 
+  distinct() %>% 
+  inner_join(mound.nodes, by = c("OTU_ID" = "Genome")) %>% 
+  ggplot(aes(x,y)) +
+  geom_point(alpha = 0.1) +
+  facet_wrap(~ Timepoint) +
+  theme_void()
+```
+
+It looks like there is a set of vOTUs that remained detectable as the dry season progresses (T17 - T25)
+Let's see what types of hosts are enriched in that area (suprise, it's actino)
+```{r}
+mound.nodes %>% 
+  left_join(iphop, by = c("Genome" = "OTU_ID")) %>% 
+  mutate(HostPhylum2 = case_when(is.na(HostPhylum) ~ "Unassigned",
+                                 HostPhylum %in% c("Actinobacteriota", "Proteobacteria", "Bacteroidota", "Firmicutes") ~ HostPhylum,
+                                 TRUE ~ "Other")) %>% 
+  mutate(HostPhylum2 = fct_relevel(HostPhylum2, "Other", "Unassigned", after=Inf)) %>% 
+  ggplot(aes(x,y, color = HostPhylum2)) +
+  geom_point(data = . %>% filter(HostPhylum2 %in% c("Unassigned", "Other")), alpha = 0.5) +
+  geom_point(data = . %>% filter(!HostPhylum2 %in% c("Unassigned", "Other")), alpha = 0.5) +
+  scale_color_manual(values = phylum.pal,
+                     limits = c("Actinobacteriota", "Proteobacteria", "Bacteroidota", "Firmicutes", "Other", "Unassigned")) +
+  theme_void()
+```
+
+Same analyses but for swales
+Location differences
+```{r}
+votu %>% 
+  tidy_otu() %>% 
+  filter(Count > 0) %>% 
+  inner_join(select(v.map, SampleID, Position, Location), by = "SampleID") %>% 
+  filter(SampleID %in% good.viromes) %>% 
+  filter(Position == "Bottom") %>% 
+  select(OTU_ID, Location) %>% 
+  distinct() %>% 
+  inner_join(swale.nodes, by = c("OTU_ID" = "Genome")) %>% 
+  ggplot(aes(x,y)) +
+  geom_point(alpha = 0.1) +
+  facet_grid(. ~ Location) +
+  theme_void()
+```
+Temporal differences
+```{r}
+votu %>% 
+  tidy_otu() %>% 
+  filter(Count > 0) %>% 
+  inner_join(select(v.map, SampleID, Position, Timepoint), by = "SampleID") %>% 
+  filter(SampleID %in% good.viromes) %>% 
+  filter(Position == "Bottom") %>% 
+  select(OTU_ID, Timepoint) %>% 
+  distinct() %>% 
+  inner_join(swale.nodes, by = c("OTU_ID" = "Genome")) %>% 
+  ggplot(aes(x,y)) +
+  geom_point(alpha = 0.1) +
+  facet_wrap(~ Timepoint) +
+  theme_void()
+```
+
+Host distribution
+```{r}
+swale.nodes %>% 
+  left_join(iphop, by = c("Genome" = "OTU_ID")) %>% 
+  mutate(HostPhylum2 = case_when(is.na(HostPhylum) ~ "Unassigned",
+                                 HostPhylum %in% c("Actinobacteriota", "Proteobacteria", "Bacteroidota", "Firmicutes") ~ HostPhylum,
+                                 TRUE ~ "Other")) %>% 
+  mutate(HostPhylum2 = fct_relevel(HostPhylum2, "Other", "Unassigned", after=Inf)) %>% 
+  ggplot(aes(x,y, color = HostPhylum2)) +
+  geom_point(data = . %>% filter(HostPhylum2 %in% c("Unassigned", "Other")), alpha = 0.1) +
+  geom_point(data = . %>% filter(!HostPhylum2 %in% c("Unassigned", "Other")), alpha = 0.5) +
+  scale_color_manual(values = phylum.pal,
+                     limits = c("Actinobacteriota", "Proteobacteria", "Bacteroidota", "Firmicutes", "Other", "Unassigned")) +
+  theme_void()
+```
+
+Let's inspect the aggregated relative abundanaces of predicted hosts across time.
+There does seem to be an increase in Actinos during the dry season, especially evident in the swales
+```{r}
+votu %>% 
+  rel_ab() %>% 
+  tidy_otu() %>% 
+  filter(Count > 0) %>% 
+  inner_join(select(v.map, SampleID, Feature, Location, Timepoint,DNase), by = "SampleID") %>% 
+  filter(SampleID %in% good.viromes) %>% 
+  left_join(iphop, by = "OTU_ID") %>% 
+  mutate(HostPhylum2 = case_when(is.na(HostPhylum) ~ "Unassigned",
+                                HostPhylum %in% c("Actinobacteriota", "Proteobacteria", "Bacteroidota", "Firmicutes") ~ HostPhylum,
+                                TRUE ~ "Other")) %>% 
+  mutate(HostPhylum2 = fct_relevel(HostPhylum2, "Other", "Unassigned", after=Inf)) %>% 
+  group_by(Feature, Location, Timepoint, HostPhylum2) %>% 
+  summarise(AggRelAb = sum(Count)) %>% 
+  ggplot(aes(Timepoint, AggRelAb,  fill = HostPhylum2)) +
+  geom_bar(stat = "identity") +
+  facet_grid(Feature ~ Location) +
+  scale_fill_manual(values = phylum.pal,
+                     limits = c("Actinobacteriota", "Proteobacteria", "Bacteroidota", "Firmicutes", "Other", "Unassigned")) +
+  basic.theme() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Focus on the Actinos
+votu %>% 
+  rel_ab() %>% 
+  tidy_otu() %>% 
+  filter(Count > 0) %>% 
+  inner_join(select(v.map, SampleID, Feature, Location, Timepoint,DNase), by = "SampleID") %>% 
+  filter(SampleID %in% good.viromes) %>% 
+  left_join(iphop, by = "OTU_ID") %>% 
+  mutate(HostPhylum2 = case_when(is.na(HostPhylum) ~ "Unassigned",
+                                HostPhylum %in% c("Actinobacteriota", "Proteobacteria", "Bacteroidota", "Firmicutes") ~ HostPhylum,
+                                TRUE ~ "Other")) %>% 
+  mutate(HostPhylum2 = fct_relevel(HostPhylum2, "Other", "Unassigned", after=Inf)) %>% 
+  group_by(Feature, Location, Timepoint, HostPhylum2) %>% 
+  summarise(AggRelAb = sum(Count)) %>% 
+  filter(HostPhylum2 == "Actinobacteriota") %>% 
+  ggplot(aes(Timepoint, AggRelAb)) +
+  geom_bar(stat = "identity", fill = phylum.pal[1]) +
+  facet_grid(Feature ~ Location) +
+  basic.theme() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+

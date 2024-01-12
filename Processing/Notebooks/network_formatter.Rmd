@@ -1,0 +1,88 @@
+---
+title: "vibrant network layout retrieval"
+author: "Christian Santos-Medellin"
+---
+
+Load libraries
+```{r}
+source("../../General/general_functions.R")
+library(GGally)
+library(tidyverse)
+```
+
+Load data
+I am currently focusing on the set of vOTUs captured by the tables rarefied at the minimum sequencing depth. If needed, replace the vOTU table file to calculate the layout for other rarefaction approaches
+```{r}
+genome.ov <- read.table("../Data/vcontact/genome_by_genome_overview.csv", header = T, sep = ",")
+
+ntwk <- read.table("../Data/vcontact/c1.ntw", header = F, sep = " ", col.names = c("OTU1", "OTU2", "Score"))
+
+otu <- readRDS("../../Analysis/Data/rare_min_votu75_tmean.RDS")
+otu <- otu[, colSums(otu) > 0]
+otu <- otu[rowSums(otu) > 0, ]
+```
+
+Retrieve the set of vOTUs detected in the temporal study in each of the two sampled features
+```{r}
+soil.map <- readRDS("../../Analysis/Data/soil_map.RDS")
+
+map <- readRDS("../../Analysis/Data/dna_map.RDS") %>% 
+  mutate(SampleID = DNAID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat), by = "SoilID") %>% 
+  filter(Study == "Temporal")
+
+top.otu <- otu[,colnames(otu) %in% filter(map, Position == "Top")$SampleID]
+top.otu <- top.otu[rowSums(top.otu)>0,]
+
+bot.otu <- otu[,colnames(otu) %in% filter(map, Position == "Bottom")$SampleID]
+bot.otu <- bot.otu[rowSums(bot.otu)>0,]
+```
+
+
+Subset network to only include the contigs identified in the temporal study, get the network configuration and save the nodes and edges info
+NOTE: I RAN OUT OF VECTOR MEMORY FOR THIS STEP SO I COULDN'T GET THE LAYOUT FOR THE ENTIRE SET OF VOTUS
+```{r}
+# ntwk.filt <- ntwk  %>%
+#   filter(OTU1 %in% rownames(otu) & OTU2 %in% rownames(otu))
+# 
+# nodes.filt <- ggnet2(ntwk.filt[,-3], mode = "fruchtermanreingold", layout.par = list(list=(niter=250)))$data %>%
+#   rename("Genome" = "label")
+# edges.filt <- ntwk.filt %>%
+#   mutate(Pair = paste(OTU1, OTU2, sep = ".")) %>%
+#   gather(key = "Member", value = "Genome", -Pair, -Score) %>%
+#   inner_join(nodes.filt, by = "Genome")
+```
+
+Subset network to only include the vOTUs identified in the mounds from the temporal study, get the network configuration and save the nodes and edges info
+```{r}
+top.ntwk.filt <- ntwk  %>%
+  filter(OTU1 %in% rownames(top.otu) & OTU2 %in% rownames(top.otu))
+
+top.nodes.filt <- ggnet2(top.ntwk.filt[,-3], mode = "fruchtermanreingold", layout.par = list(list=(niter=500)))$data %>% 
+  rename("Genome" = "label")
+top.edges.filt <- top.ntwk.filt %>% 
+  mutate(Pair = paste(OTU1, OTU2, sep = ".")) %>% 
+  gather(key = "Member", value = "Genome", -Pair, -Score) %>% 
+  inner_join(top.nodes.filt, by = "Genome")
+
+saveRDS(top.nodes.filt, "../../Analysis/Data/mound_ntwk_filt_nodes_rare_min_votu75.RDS")
+saveRDS(top.edges.filt, "../../Analysis/Data/mound_ntwk_filt_edges_rare_min_votu75.RDS")
+saveRDS(top.ntwk.filt, "../../Analysis/Data/mound_ntwk_filt_rare_min_votu75.RDS")
+```
+
+Subset network to only include the vOTUs identified in the swales from the temporal study, get the network configuration and save the nodes and edges info
+```{r}
+bot.ntwk.filt <- ntwk  %>%
+  filter(OTU1 %in% rownames(bot.otu) & OTU2 %in% rownames(bot.otu))
+
+bot.nodes.filt <- ggnet2(bot.ntwk.filt[,-3], mode = "fruchtermanreingold", layout.par = list(list=(niter=500)))$data %>% 
+  rename("Genome" = "label")
+bot.edges.filt <- bot.ntwk.filt %>% 
+  mutate(Pair = paste(OTU1, OTU2, sep = ".")) %>% 
+  gather(key = "Member", value = "Genome", -Pair, -Score) %>% 
+  inner_join(bot.nodes.filt, by = "Genome")
+
+saveRDS(bot.nodes.filt, "../../Analysis/Data/swale_ntwk_filt_nodes_rare_min_votu75.RDS")
+saveRDS(bot.edges.filt, "../../Analysis/Data/swale_ntwk_filt_edges_rare_min_votu75.RDS")
+saveRDS(bot.ntwk.filt, "../../Analysis/Data/swale_ntwk_filt_rare_min_votu75.RDS")
+```

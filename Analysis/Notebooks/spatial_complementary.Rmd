@@ -1,0 +1,389 @@
+---
+title: "Spatial patterns"
+author: "Christian Santos-Medellin"
+---
+
+This notebook focuses on the additional set of samples collected at the end of the sampling season across an extended set of locations.
+Note that for this experiment, we only sampled the mounds.
+
+Load libraries
+```{r}
+source("../../General/general_functions.R")
+source("../../General/plotting_parameters.R")
+library(lubridate)
+library(RColorBrewer)
+library(eulerr)
+library(cowplot)
+library(broom)
+library(vegan)
+library(tidyverse)
+```
+
+Read files
+```{r}
+climate <- read.table("../Data/climate.tsv", header = T, sep = "\t") %>% 
+  mutate(Date = mdy(Date))
+
+soil.map <- readRDS("../Data/soil_map.RDS") %>% 
+  mutate(GSM = GSM*100) %>% 
+  mutate(GSM_max = ifelse(GSM > 30, 30, GSM))
+
+v.map <- readRDS("../Data/dna_map.RDS") %>% 
+  mutate(SampleID = DNAID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat, GSM_max), by = "SoilID") 
+
+b.map <- readRDS("../Data/dna_map.RDS") %>% 
+  mutate(SampleID = AmpliconID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat, GSM_max), by = "SoilID")
+
+votu <- readRDS("../Data/rare_min_votu75_tmean.RDS")
+votu <- votu[, colSums(votu) > 0]
+votu <- votu[rowSums(votu) > 0, ]
+
+asv <- readRDS("../Data/amplicon_raremin_nsing_asv.RDS")
+asv <- asv[, colSums(asv) > 0]
+asv <- asv[rowSums(asv) > 0, ]
+
+extra.vars <- c("Lime", "Texture", "lbs", "H_Sat", "pH_Buffer", "Ca_Sat", "K_Sat", "Na_Sat", "Mg_Sat")
+
+soil.mtx <- soil.map %>% 
+  filter(ProfileWard) %>% 
+  select(SoilID, pH_Soil:Na_Sat) %>% 
+  select(-extra.vars) %>% 
+  as.data.frame(row.names = .$SoilID) %>% 
+  select(-SoilID) %>% 
+  as.matrix()
+
+gps <- readRDS("../Data/gps.RDS")
+```
+
+Generate the subsets of viromes and amplicon profiles for different analyses
+```{r}
+# All viromes generated from fresh soils + the subset of viromes from frozen soils from time points with no associated fresh soil profile
+good.viromes <- v.map %>% 
+  filter(!is.na(WGSID)) %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(Fraction == "Viral") %>% 
+  filter(Study == "Temporal") %>% 
+  filter(SampleID %in% colnames(votu)) %>% 
+  select(SoilID, WGSID, DNase) %>% 
+  mutate(DNase = ifelse(DNase, "Yes", "No")) %>% 
+  spread(key = DNase, value = WGSID) %>% 
+  mutate(SampleID = ifelse(is.na(Yes), No, Yes)) %>% 
+  .$SampleID
+
+# All viromes generated from fresh soils
+dnase.viromes <- v.map %>% 
+  filter(!is.na(WGSID)) %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(Fraction == "Viral") %>% 
+  filter(DNase) %>% 
+  filter(SampleID %in% colnames(votu)) %>% 
+  .$SampleID
+
+# All total DNA amplicon profiles generated fresh soils
+fresh.total.amp <- b.map %>% 
+  filter(!is.na(AmpliconID)) %>% 
+  filter(Study == "Temporal") %>% 
+  filter(Fraction == "Total") %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(SampleID %in% colnames(asv)) %>% 
+  .$SampleID
+  
+# All viral-fraction DNA amplicon profiles generated from fresh soils + the subset of amplicon profiles from frozen soils from time points with no associated fresh soil profile
+good.vfrac.amp <- b.map %>% 
+  filter(!is.na(AmpliconID)) %>% 
+  filter(Study == "Temporal") %>% 
+  filter(Fraction == "Viral")  %>% 
+  filter(SampleID %in% colnames(asv)) %>% 
+  select(SoilID, AmpliconID, SoilStatus) %>% 
+  spread(key = SoilStatus, value = AmpliconID) %>% 
+  mutate(SampleID = ifelse(is.na(Fresh), Frozen, Fresh)) %>% 
+  .$SampleID
+```
+
+Identify the vOTUs detected in different data subsets
+```{r}
+# subsetting function
+subset_otu <- function(otu, filt.map) {
+  filt.otu <- otu[,colnames(otu) %in% filt.map$SampleID]
+  filt.otu[rowSums(filt.otu) > 0,]
+}
+
+# All mound vOTUs detected in the set of 24 locations sampled for the comlementary experiment
+spt.votu <- subset_otu(votu, filter(v.map, Study == "Spatial" & Position == "Top"))
+# All mound vOTUs detected in all samples collected for the main timeseries experiment
+tmp.votu <- subset_otu(votu, filter(v.map, SampleID %in% good.viromes & Position == "Top"))
+
+# Set of vOTUs detected in each of the four locations (across all time points) sampled for the main timeseries experiment
+tmp1.votu <- subset_otu(votu, filter(v.map, SampleID %in% good.viromes & Position == "Top" & Location == "LT1"))
+tmp2.votu <- subset_otu(votu, filter(v.map, SampleID %in% good.viromes & Position == "Top" & Location == "LT2"))
+tmp3.votu <- subset_otu(votu, filter(v.map, SampleID %in% good.viromes & Position == "Top" & Location == "LT3"))
+tmp4.votu <- subset_otu(votu, filter(v.map, SampleID %in% good.viromes & Position == "Top" & Location == "LT4"))
+
+# All mound ASVs detected in the set of 24 locations sampled for the comlementary experiment
+spt.asv <- subset_otu(asv, filter(b.map, Study == "Spatial" & Position == "Top" & Fraction == "Total"))
+# All mound ASVs detected in all samples collected for the main timeseries experiment
+tmp.asv <- subset_otu(asv, filter(b.map, SampleID %in% fresh.total.amp & Position == "Top"))
+
+# Set of ASVs detected in each of the four locations (across all time points) sampled for the main timeseries experiment
+tmp1.asv <- subset_otu(asv, filter(b.map, SampleID %in% fresh.total.amp & Position == "Top" & Location == "LT1"))
+tmp2.asv <- subset_otu(asv, filter(b.map, SampleID %in% fresh.total.amp & Position == "Top" & Location == "LT2"))
+tmp3.asv <- subset_otu(asv, filter(b.map, SampleID %in% fresh.total.amp & Position == "Top" & Location == "LT3"))
+tmp4.asv <- subset_otu(asv, filter(b.map, SampleID %in% fresh.total.amp & Position == "Top" & Location == "LT4"))
+```
+
+Create a function that calculates the accumulation curves and retrieves the formatted data
+```{r}
+get_specaccum <- function(otu) {
+  sp.list <- list()
+  sp <- specaccum(t(otu), method = "random", permutations = 100)
+  perm <- sp$perm
+  sp.list[["permutations"]] <- as.tibble(perm) %>% 
+    mutate(Sites = 1:nrow(.)) %>% 
+    gather(key = "Permutation", value = "Species", -Sites) 
+  sp.list[["richness"]] <- data.frame(Sites = sp$sites, Species = sp$richness)
+  sp.list
+}
+```
+
+Get the accumulation curves for different sets 
+```{r}
+spt.accum <- get_specaccum(spt.votu)
+tmp.accum <- get_specaccum(tmp.votu)
+
+tmp1.accum <- get_specaccum(tmp1.votu)
+tmp2.accum <- get_specaccum(tmp2.votu)
+tmp3.accum <- get_specaccum(tmp3.votu)
+tmp4.accum <- get_specaccum(tmp4.votu)
+
+asv.spt.accum <- get_specaccum(spt.asv)
+asv.tmp.accum <- get_specaccum(tmp.asv)
+asv.tmp1.accum <- get_specaccum(tmp1.asv)
+asv.tmp2.accum <- get_specaccum(tmp2.asv)
+asv.tmp3.accum <- get_specaccum(tmp3.asv)
+asv.tmp4.accum <- get_specaccum(tmp4.asv)
+
+```
+
+Aggregate processed data
+```{r}
+perm.tidy <- rbind(mutate(spt.accum$permutations, Study = "Spatial", Location = "All", Profile = "vOTU"), 
+                   mutate(tmp.accum$permutations, Study = "Temporal", Location = "All", Profile = "vOTU"),
+                   mutate(tmp1.accum$permutations, Study = "Temporal", Location = "LT1", Profile = "vOTU"),
+                   mutate(tmp2.accum$permutations, Study = "Temporal", Location = "LT2", Profile = "vOTU"),
+                   mutate(tmp3.accum$permutations, Study = "Temporal", Location = "LT3", Profile = "vOTU"),
+                   mutate(tmp4.accum$permutations, Study = "Temporal", Location = "LT4", Profile = "vOTU"),
+                   mutate(asv.spt.accum$permutations, Study = "Spatial", Location = "All", Profile = "ASV"), 
+                   mutate(asv.tmp.accum$permutations, Study = "Temporal", Location = "All", Profile = "ASV"),
+                   mutate(asv.tmp1.accum$permutations, Study = "Temporal", Location = "LT1", Profile = "ASV"),
+                   mutate(asv.tmp2.accum$permutations, Study = "Temporal", Location = "LT2", Profile = "ASV"),
+                   mutate(asv.tmp3.accum$permutations, Study = "Temporal", Location = "LT3", Profile = "ASV"),
+                   mutate(asv.tmp4.accum$permutations, Study = "Temporal", Location = "LT4", Profile = "ASV"))
+
+rich.tidy <- rbind(mutate(spt.accum$richness, Study = "Spatial", Location = "All", Profile = "vOTU"), 
+                   mutate(tmp.accum$richness, Study = "Temporal", Location = "All", Profile = "vOTU"),
+                   mutate(tmp1.accum$richness, Study = "Temporal", Location = "LT1", Profile = "vOTU"),
+                   mutate(tmp2.accum$richness, Study = "Temporal", Location = "LT2", Profile = "vOTU"),
+                   mutate(tmp3.accum$richness, Study = "Temporal", Location = "LT3", Profile = "vOTU"),
+                   mutate(tmp4.accum$richness, Study = "Temporal", Location = "LT4", Profile = "vOTU"),
+                   mutate(asv.spt.accum$richness, Study = "Spatial", Location = "All", Profile = "ASV"), 
+                   mutate(asv.tmp.accum$richness, Study = "Temporal", Location = "All", Profile = "ASV"),
+                   mutate(asv.tmp1.accum$richness, Study = "Temporal", Location = "LT1", Profile = "ASV"),
+                   mutate(asv.tmp2.accum$richness, Study = "Temporal", Location = "LT2", Profile = "ASV"),
+                   mutate(asv.tmp3.accum$richness, Study = "Temporal", Location = "LT3", Profile = "ASV"),
+                   mutate(asv.tmp4.accum$richness, Study = "Temporal", Location = "LT4", Profile = "ASV"))
+```
+
+Plot
+```{r}
+ggplot(perm.tidy %>% filter(!(Study == "Temporal" & Location == "All")), aes(Sites, Species, color = paste(Study, Location))) +
+  geom_point(data = . %>% filter(Study == "Temporal"), alpha = 0.1) +
+  geom_line(data = rich.tidy %>% filter((Study == "Temporal" & Location != "All")), size = 1) +
+  geom_point(data = . %>% filter(Study == "Spatial"), alpha = 0.1) +
+  geom_line(data = rich.tidy %>% filter((Study == "Spatial")), size = 1) +
+  scale_color_manual(name = "", values = c("gray25", location.pal)) +
+  ylab("Cumulative Richness\n(Number of vOTUs/ASVs)") +
+  xlab("Sampling Effort (Number of Samples)") +
+  facet_wrap(. ~ Profile, scales = "free") +
+  theme_light() +
+  basic.theme()
+```
+
+Plot Euler diagrams showing the overlap between the sets of vOTUs/ASVs detected in each of the two experiments
+```{r}
+plot(euler(list("Temporal" = rownames(tmp.votu), 
+                "Spatial" = rownames(spt.votu))),
+      fills = "white",
+    #  edges = list(col = position.pal, lex = 5),
+      labels = list(fontfamily = "Helvetica",
+                  #  col = position.pal,
+                    cex = 1), 
+      quantities = list(fontfamily = "Helvetica",
+                  #   col = c("black", "black", "black"),
+                    cex = 1))
+
+
+plot(euler(list("Temporal" = rownames(tmp.asv), 
+                "Spatial" = rownames(spt.asv))),
+      fills = "white",
+    #  edges = list(col = position.pal, lex = 5),
+      labels = list(fontfamily = "Helvetica",
+                  #  col = position.pal,
+                    cex = 1), 
+      quantities = list(fontfamily = "Helvetica",
+                  #   col = c("black", "black", "black"),
+                    cex = 1))
+```
+
+Calculate the spatial distance between each of the locations sampled for the complementary experiment
+NOTE: I am just using the Euclidean distance because it's just a constrained site but maybe try the geographic distance and see if results change much
+(e.g. with https://search.r-project.org/CRAN/refmans/raster/html/pointDistance.html)
+```{r}
+gps.mtx <- gps %>% 
+  select(Latitude, Longitude) 
+row.names(gps.mtx) <- gps$Location
+
+spatial.dist.tidy <- dist(gps.mtx) %>% 
+  as.matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Location.x") %>% 
+  gather(key = "Location.y", value = "SpatialDistance", -Location.x)
+
+```
+
+Calculate the environmental distance between samples based on the abiotic properties captured for the edaphic profiles
+```{r}
+#Subset data
+soil.map.spatial <- soil.map %>% 
+  filter(Study == "Spatial") %>% 
+  filter(SoilID %in% row.names(soil.mtx)) %>% 
+  mutate(SampleID = SoilID)
+# Normalize data
+soil.mtx.z <- soil.mtx[match(soil.map.spatial$SoilID, row.names(soil.mtx)),] %>% vegan::decostand(method = "standardize")
+# Calculate distance
+soil.dist <- dist(soil.mtx.z, method = "euclidean") %>% as.matrix()
+# Remove upper triangle to remove duplicated pairwise comparisons
+soil.dist[upper.tri(soil.dist)] <- NA 
+
+#Create a long data frame and remove pairwise comparisons between the same sample
+soil.dist.tidy <- soil.dist %>% 
+  as.data.frame() %>% 
+  mutate(SoilID.x = row.names(.)) %>% 
+  gather(key = "SoilID.y", value = "EnvironmentalDist", -SoilID.x) %>% 
+  filter(!is.na(EnvironmentalDist)) %>% 
+  filter(SoilID.x != SoilID.y) %>% 
+  inner_join(soil.map.spatial, by = c("SoilID.x" = "SoilID")) %>% 
+  inner_join(soil.map.spatial, by = c("SoilID.y" = "SoilID")) 
+```
+
+
+Calculate Bray-Curtis dissimilarities
+```{r}
+votu.norm <- votu %>% rel_ab() %>% log_norm()
+v.dist <- beta_div_dist(votu.norm)
+v.dist[upper.tri(v.dist)] <- NA 
+
+asv.norm <- asv %>% rel_ab() %>% log_norm()
+b.dist <- beta_div_dist(asv.norm)
+b.dist[upper.tri(b.dist)] <- NA 
+```
+
+Reformat Bray-Curtis dissimilarities 
+```{r}
+# vOTUs
+v.dist.tidy <- v.dist %>% 
+  as.data.frame() %>% 
+  rownames_to_column("SampleID.x") %>% 
+  gather(key = "SampleID.y", value = "Distance", -SampleID.x) %>% 
+  inner_join(v.map, by = c("SampleID.x" = "SampleID")) %>% 
+  inner_join(v.map, by = c("SampleID.y" = "SampleID")) %>% 
+  filter(SampleID.x != SampleID.y) 
+
+# ASVs
+b.dist.tidy <- b.dist %>% 
+  as.data.frame() %>% 
+  rownames_to_column("SampleID.x") %>% 
+  gather(key = "SampleID.y", value = "Distance", -SampleID.x) %>% 
+  inner_join(b.map, by = c("SampleID.x" = "SampleID")) %>% 
+  inner_join(b.map, by = c("SampleID.y" = "SampleID")) %>% 
+  filter(SampleID.x != SampleID.y) 
+
+# Bind
+dist.tidy <- rbind(mutate(v.dist.tidy, Profile = "vOTU"),
+                   mutate(b.dist.tidy, Profile = "ASV"))
+```
+
+
+Compare spatial distance vs Bray-Curtis dissimilarities
+```{r}
+dist.tidy %>% 
+  filter(Study.x == Study.y) %>% 
+  filter(Study.x == "Spatial") %>% 
+  filter(Fraction.x == Fraction.y) %>% 
+  inner_join(spatial.dist.tidy, by = c("Location.x", "Location.y")) %>% 
+  ggplot(aes(SpatialDistance, Distance)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  xlab("Spatial distance") +
+  ylab("Bray-Curtis dissimilarity") +
+  facet_wrap(. ~ Profile + Fraction.x, scales = "free") +
+  basic.theme()
+```
+
+Compare environmental distance vs Bray-Curtis dissimilarities
+```{r}
+dist.tidy %>% 
+  filter(Study.x == Study.y) %>% 
+  filter(Study.x == "Spatial") %>% 
+  filter(Fraction.x == Fraction.y) %>% 
+  inner_join(soil.dist.tidy, by = c("SoilID.x", "SoilID.y")) %>% 
+  ggplot(aes(EnvironmentalDist, Distance)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  xlab("Environmental distance") +
+  ylab("Bray-Curtis dissimilarity") +
+  facet_wrap(. ~ Profile + Fraction.x, scales = "free") +
+  basic.theme()
+```
+
+Compare vOTU dissimilarities vs ASV dissimilarities
+```{r}
+v.dist.tidy %>% 
+  filter(Study.x == Study.y) %>% 
+  filter(Study.x == "Spatial") %>% 
+  inner_join(b.dist.tidy, by = c("SoilID.x", "SoilID.y")) %>% 
+  ggplot(aes(Distance.x, Distance.y)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  xlab("vOTU Bray-Curtis dissimilarity") +
+  ylab("ASV Bray-Curtis dissimilarity") +
+  basic.theme()
+```
+
+It looks like there's not a clear distance-decay relationship but let's confirm with a PCoA
+```{r}
+# Plot GPS coordinates to see the spatial arrangementof the sampled mounds
+gps %>% 
+  filter(Study == "Spatial") %>% 
+  inner_join(soil.map, by = "Location") %>% 
+  ggplot(aes(Latitude, Longitude)) +
+  geom_point(aes(color = Location)) +
+  ggrepel::geom_text_repel(aes(label = Location)) +
+  scale_color_viridis_d() +
+  theme_bw() +
+  theme(text = element_text(size = 12)) +
+  coord_flip()
+
+# vOTU PCoA
+plot_pcoa(get_pcoa(v.dist, filter(v.map, Study == "Spatial")), 1,2) +
+  geom_point(aes(fill = Location), size = 3, alpha = 0.8, shape = 21) +
+  scale_fill_viridis_d() +
+  basic.theme()
+
+# ASV PCoA
+plot_pcoa(get_pcoa(b.dist, filter(b.map, Study == "Spatial")), 1,2) +
+  geom_point(aes(fill = Location), size = 3, alpha = 0.8, shape = 21) +
+  scale_fill_viridis_d() +
+  basic.theme()
+```

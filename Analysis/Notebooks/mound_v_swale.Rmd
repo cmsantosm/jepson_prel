@@ -1,0 +1,382 @@
+---
+title: "Mound vs Swale analysis"
+author: "Christian Santos-Medellin"
+---
+
+This notebook contains all the analyses comparing the compositional trends of communities associated with mounds and swales
+
+Load libraries
+```{r}
+source("../../General/general_functions.R")
+source("../../General/plotting_parameters.R")
+library(lubridate)
+library(eulerr)
+library(cowplot)
+library(broom)
+library(tidyverse)
+```
+
+Read files
+```{r}
+climate <- read.table("../Data/climate.tsv", header = T, sep = "\t") %>% 
+  mutate(Date = mdy(Date))
+
+soil.map <- readRDS("../Data/soil_map.RDS") %>% 
+  mutate(GSM = GSM*100) %>% 
+  mutate(GSM_max = ifelse(GSM > 30, 30, GSM))
+
+v.map <- readRDS("../Data/dna_map.RDS") %>% 
+  mutate(SampleID = DNAID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat, GSM_max), by = "SoilID") 
+
+b.map <- readRDS("../Data/dna_map.RDS") %>% 
+  mutate(SampleID = AmpliconID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat, GSM_max), by = "SoilID") 
+
+votu <- readRDS("../Data/rare_min_votu75_tmean.RDS")
+votu <- votu[, colSums(votu) > 0]
+votu <- votu[rowSums(votu) > 0, ]
+
+asv <- readRDS("../Data/amplicon_raremin_nsing_asv.RDS")
+asv <- asv[, colSums(asv) > 0]
+asv <- asv[rowSums(asv) > 0, ]
+
+extra.vars <- c("Lime", "Texture", "lbs", "H_Sat", "pH_Buffer", "Ca_Sat", "K_Sat", "Na_Sat", "Mg_Sat")
+
+soil.mtx <- soil.map %>% 
+  filter(Study == "Temporal") %>% 
+  filter(ProfileWard) %>% 
+  select(SoilID, pH_Soil:Na_Sat) %>% 
+  select(-extra.vars) %>% 
+  as.data.frame(row.names = .$SoilID) %>% 
+  select(-SoilID) %>% 
+  as.matrix()
+```
+
+Generate the subsets of viromes and amplicon profiles for different analyses
+```{r}
+# All viromes generated from fresh soils + the subset of viromes from frozen soils from time points with no associated fresh soil profile
+good.viromes <- v.map %>% 
+  filter(!is.na(WGSID)) %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(Fraction == "Viral") %>% 
+  filter(Study == "Temporal") %>% 
+  filter(SampleID %in% colnames(votu)) %>% 
+  select(SoilID, WGSID, DNase) %>% 
+  mutate(DNase = ifelse(DNase, "Yes", "No")) %>% 
+  spread(key = DNase, value = WGSID) %>% 
+  mutate(SampleID = ifelse(is.na(Yes), No, Yes)) %>% 
+  .$SampleID
+
+# All viromes generated from fresh soils
+dnase.viromes <- v.map %>% 
+  filter(!is.na(WGSID)) %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(Fraction == "Viral") %>% 
+  filter(DNase) %>% 
+  filter(SampleID %in% colnames(votu)) %>% 
+  .$SampleID
+
+# All total DNA amplicon profiles generated fresh soils
+fresh.total.amp <- b.map %>% 
+  filter(!is.na(AmpliconID)) %>% 
+  filter(Study == "Temporal") %>% 
+  filter(Fraction == "Total") %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(SampleID %in% colnames(asv)) %>% 
+  .$SampleID
+  
+# All viral-fraction DNA amplicon profiles generated from fresh soils + the subset of amplicon profiles from frozen soils from time points with no associated fresh soil profile
+good.vfrac.amp <- b.map %>% 
+  filter(!is.na(AmpliconID)) %>% 
+  filter(Study == "Temporal") %>% 
+  filter(Fraction == "Viral")  %>% 
+  filter(SampleID %in% colnames(asv)) %>% 
+  select(SoilID, AmpliconID, SoilStatus) %>% 
+  spread(key = SoilStatus, value = AmpliconID) %>% 
+  mutate(SampleID = ifelse(is.na(Fresh), Frozen, Fresh)) %>% 
+  .$SampleID
+```
+
+
+Calculate community richness for each sample
+```{r}
+v.richness.df <- data.frame(SampleID = colnames(votu),
+                            Richness = colSums(votu > 0))
+
+b.richness.df <- data.frame(SampleID = colnames(asv),
+                            Richness = colSums(asv > 0))
+```
+
+Generate parameters for plotting 
+```{r}
+# The min and max dates define the period that will be displayed for the plot
+min.date <- "2020-11-01"
+max.date <- "2022-02-01"
+
+# this vector contains the abbreviated months to display in the x axis 
+# NOTE that if you change the min and max dates, this vector will have to be updated
+year_labels <- c('N','D','J','F','M','A','M','J','J','A','S','O','N','D','J','F')
+
+# this data frame will be used to highlight each of the 3 years encompassed by the sampling campaign
+year.df <- tribble(
+  ~Period, ~PeriodLong, ~Start,  ~End, ~Mid,
+  "P1", "2020", min.date, "2020-12-31", "2020-12-01",
+  "P2", "2021", "2021-01-01", "2021-12-31", "2021-07-01",
+  "P3", "2022", "2022-01-01", max.date, "2022-01-15"
+) %>% 
+  mutate(StartDate = ymd(Start),
+         EndDate = ymd(End),
+         MidDate = ymd(Mid))
+
+```
+
+
+Plot the precipitation patterns observed during the sampling campaign
+Note that the outlier values are trimmed to 25 to ease the visualization of the ppt trends
+```{r}
+climate %>% 
+  filter(Date > as.Date(min.date)) %>%
+  filter(Date < as.Date(max.date)) %>%
+  ggplot() +
+  geom_rect(data = year.df, aes(xmin = StartDate, xmax = EndDate + 1, 
+                                  ymin = -0.5, ymax = -3.5, 
+                                  fill = Period)) + 
+  geom_text(data = year.df, aes(x = MidDate, label = PeriodLong), y = -1.5, hjust = 0.5, vjust = 0.5, size = 2.5) + 
+  geom_line(aes(Date, TotalPrecipitation)) +
+  coord_cartesian(xlim = c(as.Date(min.date), as.Date(max.date)),
+                  ylim = c(-3, 25)) +
+  scale_fill_manual(values = c("gray25", "gray75", "gray25")) +
+  scale_x_date(breaks = c(seq(from=as.Date(min.date),to=as.Date(max.date),by="month")),
+               labels = year_labels)  +
+  xlab("Collection time point") +
+  ylab("Daily rainfall\n(mm)") +
+  basic.theme() +
+  theme(legend.position = "none")
+```
+
+Plot the gravimetric soil moisture trends
+```{r}
+soil.map %>% 
+  filter(Study == "Temporal") %>% 
+  ggplot() +
+  geom_point(aes(CollectionDate, GSM, color = Feature), alpha = 0.9, shape = 16) +
+  geom_line(data = . %>%
+              group_by(CollectionDate, Feature) %>%
+              summarise(MeanGSM = mean(GSM)),
+            aes(CollectionDate, MeanGSM, color = Feature)) +
+  scale_color_manual(values = feature.pal) +
+  scale_x_date("Date",breaks = c(seq(from=as.Date(min.date),to=as.Date(max.date),by="month")),
+               labels = year_labels)  +
+  ylab("Gravimetric soil\nmoisture (%)") +
+  coord_cartesian(xlim = c(as.Date(min.date), as.Date(max.date))) +
+  basic.theme()
+
+```
+
+Plot the DNA yields recovered from DNase-treated viromes
+```{r}
+v.map %>% 
+  filter(Study == "Temporal") %>% 
+  filter(Fraction == "Viral") %>% 
+  filter(DNase) %>% 
+  ggplot() +
+  geom_point(aes(CollectionDate, Yield, color = Feature), alpha = 0.8, shape = 16) +
+  geom_line(data = . %>%
+              group_by(CollectionDate, Feature) %>%
+              summarise(MeanYield = mean(Yield)),
+            aes(CollectionDate, MeanYield, color = Feature)) +
+  scale_color_manual(values = feature.pal) +
+  scale_x_date("Date",breaks = c(seq(from=as.Date(min.date),to=as.Date(max.date),by="month")),
+               labels = year_labels)  +
+  ylab("DNA yield\n(ng/g of soil)") +
+  coord_cartesian(xlim = c(as.Date(min.date), as.Date(max.date))) +
+  basic.theme()
+
+```
+
+Filter richness patterns recovered from DNase-treated viromes. 
+For time points where the DNase-treated viromes had no DNA yields impute the richness to be zero.
+Optionally, for time points where DNase-treated richness was imputed to be zero, add the values of the non-treated viromes to the plot to show that the set of recovered vOTUs was negligible. 
+Note that the trend line is calculated based exclusively  on the DNase-treated values.
+```{r}
+v.richness.df %>% 
+  right_join(v.map, by = "SampleID") %>% 
+  filter(Study == "Temporal") %>%
+  filter(Fraction == "Viral") %>%
+  filter(DNase) %>%
+  mutate(Richness = ifelse(is.na(Richness),0, Richness)) %>% 
+  ggplot() +
+  geom_point(aes(CollectionDate, Richness, shape = Richness > 0, color = Feature), alpha = 0.8) +
+  geom_point(data = v.richness.df %>%  ### Delete this geom_point chunk to remove the non-treated viromes
+               inner_join(v.map, by = "SampleID") %>% 
+               filter(!DNase & SampleID %in% good.viromes), 
+             aes(CollectionDate, Richness, color = Feature), shape = 17) +
+  geom_line(data = . %>%
+              group_by(CollectionDate, Feature) %>%
+              summarise(MeanRichness = mean(Richness)),
+            aes(CollectionDate, MeanRichness, color = Feature)) +
+  scale_color_manual(values = feature.pal) +
+  scale_shape_manual(values = c(1,16)) +
+  scale_x_date(breaks = c(seq(from=as.Date(min.date),to=as.Date(max.date),by="month")),
+               labels = year_labels)  +
+  xlab("Time point") +
+  ylab("Richness\n(# vOTUs)") +
+  scale_y_continuous(labels = scales::unit_format(unit = "K", scale = 1e-3 ,accuracy = 1)) +
+  coord_cartesian(xlim = c(as.Date(min.date), as.Date(max.date))) +
+  theme_bw() +
+  theme(text = element_text(size = 12),
+        legend.position = "bottom")
+```
+
+Calculate the Bray-Curtis dissimilarity matrix for both viromes and amplicon profiles
+The dissimilarity are calculated on log-transformed relative abundances but feel free to use your nromalization method of choice
+```{r}
+votu.norm <- votu %>% rel_ab() %>% log_norm()
+v.dist <- beta_div_dist(votu.norm)
+
+asv.norm <- asv %>% rel_ab() %>% log_norm()
+b.dist <- beta_div_dist(asv.norm)
+```
+
+Plot the PCoA comparing mounds vs swales in each type of profile
+```{r}
+# Viromes
+plot_pcoa(get_pcoa(v.dist, filter(v.map, SampleID %in% good.viromes)), 1, 2) +
+  geom_point(aes(fill = Feature), size = 3, alpha = 0.8, shape = 21) +
+  scale_fill_manual(values = feature.pal) +
+  basic.theme()
+
+# Amplicon profiles generated from total DNA
+plot_pcoa(get_pcoa(b.dist, filter(b.map, SampleID %in% fresh.total.amp)), 1, 2) +
+  geom_point(aes(fill = Feature), size = 3, alpha = 0.8, shape = 21) +
+  scale_fill_manual(values = feature.pal) +
+  basic.theme()
+
+# Amplicon profiles generated from viral-fraction DNA
+plot_pcoa(get_pcoa(b.dist, filter(b.map, SampleID %in% good.vfrac.amp)), 1, 2) +
+  geom_point(aes(fill = Feature), size = 3, alpha = 0.8, shape = 21) +
+  scale_fill_manual(values = feature.pal) +
+  basic.theme()
+```
+
+Plot Euler diagrams showing the overlap in vOTUs/ASVs detected in mounds and swales
+```{r}
+# Function to plot Euler diagrams
+plot_euler <- function(otu.mtx, filt.map) {
+  filt.otu.tidy <- otu.mtx %>% 
+    tidy_otu() %>% 
+    filter(Count > 0) %>% 
+    inner_join(filt.map, by = "SampleID")
+  
+  m.ids <- filter(filt.otu.tidy, Feature == "Mound")$OTU_ID %>% unique()
+  s.ids <- filter(filt.otu.tidy, Feature == "Swale")$OTU_ID %>% unique()
+  
+  plot(euler(list("Mound" = m.ids, 
+                  "Swale" = s.ids)),
+        fills = "white",
+        edges = list(col = feature.pal, lex = 5),
+        labels = list(fontfamily = "Helvetica",
+                      col = feature.pal,
+                      cex = 1), 
+        quantities = list(fontfamily = "Helvetica",
+                       col = c("black", "black", "black"),
+                      cex = 1))
+}
+
+# Viromes
+plot_euler(votu, filter(v.map, SampleID %in% good.viromes))
+# Amplicons from total DNA
+plot_euler(asv, filter(b.map, SampleID %in% fresh.total.amp))
+# Amplicons from viral fraction DNA
+plot_euler(asv, filter(b.map, SampleID %in% good.vfrac.amp))
+```
+
+Plot PCA displaying differenc
+```{r}
+pca.res <- get_pca(soil.mtx, soil.map %>% filter(Study == "Temporal") %>% mutate(SampleID = SoilID))
+
+pca.dots <- plot_pca(pca.res, 1, 2) +
+  geom_point(aes(fill = Feature), size = 3, alpha = 0.8, shape = 21) +
+  scale_fill_manual(values = feature.pal) +
+  basic.theme()
+
+pca.dots
+```
+
+Run an ANOVA to test which variables are significantly different between the two features. 
+This is a very simple model, but feel free to add interactions if that's of interest
+```{r}
+position.anova <- soil.map %>% 
+  filter(Study == "Temporal") %>% 
+  filter(ProfileWard) %>% 
+  mutate(SampleID = SoilID) %>% 
+  gather(key = "Variable", value = "Value", pH_Soil:Na_Sat) %>% 
+  filter(!Variable %in% extra.vars) %>% 
+  mutate(Value = as.numeric(Value)) %>% 
+  group_by(Variable) %>% 
+  do(tidy(aov(Value ~ Position, .))) %>% 
+  ungroup() %>% 
+  filter(term == "Position") %>% 
+  mutate(p.adjusted = p.adjust(p.value)) %>% 
+  arrange(p.adjusted) 
+
+position.anova
+```
+
+Plot the PCA but this time highlighting the loadings and their associated p-value
+As expected from the ANOVA, soidum and calcium are the two main factors driving the separation between the two groups.
+```{r}
+scaler = 10
+
+plot_pca(pca.res, 1, 2) +
+  geom_point(color = "gray75") +
+  geom_segment(data = pca.res$rotations %>% inner_join(position.anova, by = "Variable"),
+               aes(x = 0, y = 0, xend = PC1 * scaler, yend = PC2 * scaler, color = -log10(p.adjusted)), 
+               arrow = arrow(length = unit(0.2, "cm")),
+               linewidth = 1) +
+  ggrepel::geom_text_repel(data = pca.res$rotations %>% inner_join(position.anova, by = "Variable"),
+                            aes(PC1 * scaler, PC2 * scaler, label = Variable, fill = -log10(p.adjusted)), hjust = 1, size = 4) +
+  scale_fill_viridis_c() +
+  scale_color_viridis_c() +
+  basic.theme()
+```
+
+Plot the temporal trends of individual edaphic variables highlighting differences between mounds and swales
+```{r}
+soil.map %>% 
+  filter(Study == "Temporal") %>% 
+  filter(ProfileWard) %>% 
+  gather(key = "Variable", value = "Value", pH_Soil:Na_Sat) %>% 
+  filter(!Variable %in% extra.vars) %>% 
+  mutate(Value = as.numeric(Value)) %>% 
+  group_by(Variable) %>% 
+  mutate(Zscore = (Value - mean(Value))/sd(Value)) %>% 
+  ggplot(aes(CollectionDate, Zscore, color = Feature)) +
+  geom_point() +
+  geom_line(data = . %>% 
+              group_by(Variable, Feature, CollectionDate) %>% 
+              summarise(MeanZscore = mean(Zscore)),
+            aes(y = MeanZscore)) +
+  facet_wrap(~ Variable, scales = "free") +
+  scale_color_manual(values = feature.pal) +
+  basic.theme()
+```
+
+Plot boxplots of individual edaphic variables highlighting differences between mounds and swales
+```{r}
+soil.map %>% 
+  filter(Study == "Temporal") %>% 
+  filter(ProfileWard) %>% 
+  gather(key = "Variable", value = "Value", pH_Soil:Na_Sat) %>% 
+  filter(!Variable %in% extra.vars) %>% 
+  mutate(Value = as.numeric(Value)) %>% 
+  group_by(Variable) %>% 
+  mutate(Zscore = (Value - mean(Value))/sd(Value)) %>% 
+  ggplot(aes(Feature, Value, color = Feature)) +
+  geom_boxplot() +
+  facet_wrap(~ Variable, scales = "free") +
+  scale_color_manual(values = feature.pal) +
+  basic.theme()
+```
+

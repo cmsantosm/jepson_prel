@@ -1,0 +1,157 @@
+---
+title: "DADA2 formatting"
+author: "Christian Santos-Medellin"
+---
+```{r}
+source("../../General/general_functions.R")
+library(tidyverse)
+```
+
+```{r}
+prel.map <- read.table("../Data/amplicon/prel_map.tsv", header = T, sep = "\t")
+metadata <- read.table("../Data/amplicon/metadata.tsv", header = T, sep = "\t")
+prel.otu <- readRDS("../Data/amplicon/dada_files/otu_all.RDS")
+prel.tax <- readRDS("../Data/amplicon/dada_files/tax_all.RDS")
+```
+
+Check that the metadata makes sense. See that each time point has 8 samples, except for the couple of time points with fresh and frozen viromes.
+```{r}
+metadata %>% 
+  filter(Set == "Temporal") %>%
+  filter(Profile == "NonDnaseVirome") %>% 
+  group_by(CollectionDate) %>% 
+  count() %>% 
+  group_by(n) %>% 
+  count()
+
+metadata %>% 
+  filter(Set == "Temporal") %>%
+  filter(Profile == "TotalDNA") %>% 
+  group_by(CollectionDate) %>% 
+  count() %>% 
+  group_by(n) %>% 
+  count()
+```
+
+Identify ASVs present in the blank profiles and assess how abundant they are
+```{r}
+prel.otu.tidy <- tidy_otu(prel.otu)
+
+blank.otus <- prel.otu.tidy %>% 
+  filter(Count > 0) %>% 
+  inner_join(prel.map, by = "SampleID") %>% 
+  filter(Template == "Blank") %>% 
+  group_by(OTU_ID) %>% 
+  count() %>% 
+  .$OTU_ID
+
+prel.otu.tidy %>% 
+  inner_join(prel.map, by = "SampleID") %>% 
+  filter(Template != "Blank") %>% 
+  mutate(Blank = OTU_ID %in% blank.otus) %>% 
+  group_by(Blank) %>% 
+  summarise(Total = sum(Count))
+
+prel.otu.tidy %>% 
+  inner_join(prel.map, by = "SampleID") %>% 
+  filter(Template != "Blank") %>% 
+  mutate(Blank = ifelse(OTU_ID %in% blank.otus, "Blank", "Good")) %>% 
+  group_by(SampleID, Blank) %>% 
+  summarise(Total = sum(Count)) %>% 
+  ungroup() %>% 
+  spread(key = Blank, value = Total) %>% 
+  mutate(PercentBlank = Blank/(Blank + Good)) %>% 
+  arrange(-PercentBlank)
+```
+
+
+Identify ASVs classified as chloroplast or mitochondria
+```{r}
+table(str_detect(prel.tax$Order, "hloroplast"))
+table(str_detect(prel.tax$Family, "itochondria"))
+
+organelle.otus <- prel.tax %>% 
+  filter(str_detect(Order, "hloroplast") | str_detect(Family, "itochondria")) %>% 
+  .$OTU_ID
+```
+
+Identify ASVs with unexpected lengths
+```{r}
+otu.length <- data.frame(OTU_ID = row.names(prel.otu),
+                         Length = str_length(row.names(prel.otu)))
+
+mis.length.otus <- otu.length %>% filter(Length <251 | Length >257) %>% .$OTU_ID
+```
+
+Remove all unwanted ASVs from table
+```{r}
+otu <- prel.otu[!rownames(prel.otu) %in% c(organelle.otus, blank.otus, mis.length.otus),] 
+
+otu.tidy <- tidy_otu(otu)
+```
+
+There are some samples that were run multiple times because the DNA yields upon purification were pretty low. For those samples with redos, we need to identify and keep the profile with the highest sequencing depth
+```{r}
+good.redos <- otu.tidy %>% 
+  inner_join(prel.map, by = "SampleID") %>% 
+  filter(!is.na(Redo)) %>% 
+  filter(Template != "Blank") %>% 
+  group_by(SampleID, Template, Redo) %>% 
+  summarise(Coverage = sum(Count)) %>% 
+  group_by(Template) %>% 
+  arrange(Template) %>% 
+  mutate(MaxCoverage = max(Coverage)) %>% 
+  filter(Coverage == MaxCoverage) %>% 
+  .$SampleID %>% 
+  unique()
+
+non.redos <- otu.tidy %>% 
+  inner_join(prel.map, by = "SampleID") %>% 
+  filter(is.na(Redo)) %>% 
+  filter(Template != "Blank") %>% 
+  .$SampleID %>% 
+  unique()
+
+final.set <- c(good.redos, non.redos)
+```
+
+Generate the final ASV tables that only include the good redos and remove all profiles with less than 10000 reads
+```{r}
+final.otu <- otu[,colnames(otu) %in% final.set]
+final.otu <- final.otu[,colSums(final.otu) >= 10000]
+
+# Filter out singletons 
+final.otu.filt <- final.otu[rowSums(final.otu>0)>1,]
+
+# Rarefy to the minimum sequencing depth
+min.depth <- min(colSums(final.otu.filt)) 
+rare.otu.filt <- vegan::rrarefy(t(final.otu.filt), min.depth) %>% t()
+```
+Create mapping file with the final set of profiles
+```{r}
+map <- metadata %>% 
+  filter(Template != "Blank") %>% 
+  left_join(prel.map, by = "Template") %>% 
+  filter(SampleID %in% colnames(final.otu.filt)) %>% 
+  select(SampleID, everything()) %>% 
+  select(-Redo)
+```
+
+Remove taxonomies from unwanted ASVs
+```{r}
+final.tax <- prel.tax %>% 
+  filter(OTU_ID %in% row.names(final.otu))
+```
+
+Save files
+```{r}
+saveRDS(final.otu, "../../Analysis/Data/amplicon_asv.RDS")
+saveRDS(final.otu.filt, "../../Analysis/Data/amplicon_nsingletons_asv.RDS")
+saveRDS(rare.otu.filt, "../../Analysis/Data/amplicon_raremin_nsing_asv.RDS")
+
+saveRDS(final.tax, "../../Analysis/Data/amplicon_tax.RDS")
+
+saveRDS(map, "../Data/sample_files/amplicon_map.RDS")
+```
+
+

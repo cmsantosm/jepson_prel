@@ -1,0 +1,69 @@
+---
+title: "coverM formatting"
+author: "Christian Santos-Medellin"
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+```
+
+Read coverM tables
+```{r}
+# Function to open and reformat coverM tables
+reformat.table <- function(x) {
+  covm <- read.table(x, header = T, sep = "\t") 
+  row.names(covm) <- covm[,1]
+  covm <- covm[,-1]
+  colnames(covm) <- str_extract(colnames(covm), "\\w+\\d+") 
+  covm
+}
+
+# Read files with no rarefaction
+covm.tmean.75 <- reformat.table("../Data/coverm/votu75.tmean.tsv")
+covm.tmean <- reformat.table("../Data/coverm/votu.tmean.tsv")
+covm.count <- reformat.table("../Data/coverm/votu.count.tsv")
+
+# Read files rarefied to the minimum sequencing depth
+rare.min.covm.tmean.75 <- reformat.table("../Data/coverm/rare.min.votu.tmean75.tsv")
+rare.min.covm.tmean <- reformat.table("../Data/coverm/rare.min.votu.tmean.tsv")
+rare.min.covm.count <- reformat.table("../Data/coverm/rare.min.votu.count.tsv")
+
+# Read files rarefied to the median sequencing depth
+rare.med.covm.tmean.75 <- reformat.table("../Data/coverm/rare.med.votu.tmean75.tsv")
+rare.med.covm.tmean <- reformat.table("../Data/coverm/rare.med.votu.tmean.tsv")
+rare.med.covm.count <- reformat.table("../Data/coverm/rare.med.votu.count.tsv")
+```
+
+When requesting count tables, coverM does not filter out vOTUs with less than the requested coverage (75% in this case). Therefore, we need to use the tmean tables to identify which vOTUs need to be filtered out from count tables so that we have matching sets of vOTUs in the two types of tables.  
+```{r}
+#Filter tables with no rarefaction
+good.75 <- covm.tmean.75 > 0
+covm.count.75 <- covm.count * good.75
+
+# Filter tables rarefied to the minimum sequencing depth
+rare.min.good.75 <- rare.min.covm.tmean.75 > 0
+rare.min.covm.count.75 <- rare.min.covm.count * rare.min.good.75
+
+# Filter tables rarefied to the median sequencing depth
+rare.med.good.75 <- rare.med.covm.tmean.75 > 0
+rare.med.covm.count.75 <- rare.med.covm.count * rare.med.good.75
+
+# Generate table showing the number of mapped reads in each samples and each rarefaction approach
+mapped.reads <- data.frame(SampleID = colnames(covm.count.75),
+                           MappedReads75 = colSums(covm.count.75),
+                           RareMinMappedReads75 = colSums(rare.min.covm.count.75),
+                           RareMedMappedReads75 = colSums(rare.med.covm.count.75))
+
+write.table(mapped.reads, "../Data/mapped_reads.tsv", sep = "\t", quote = F, row.names = F)
+```
+
+Save files into the Analysis/Data folder
+```{r}
+saveRDS(covm.tmean.75, "../../Analysis/Data/votu75_tmean.RDS")
+saveRDS(covm.count.75, "../../Analysis/Data/votu75_count.RDS")
+saveRDS(rare.min.covm.tmean.75, "../../Analysis/Data/rare_min_votu75_tmean.RDS")
+saveRDS(rare.min.covm.count.75, "../../Analysis/Data/rare_min_votu75_count.RDS")
+saveRDS(rare.med.covm.tmean.75, "../../Analysis/Data/rare_med_votu75_tmean.RDS")
+saveRDS(rare.med.covm.count.75, "../../Analysis/Data/rare_med_votu75_count.RDS")
+```

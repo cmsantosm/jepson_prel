@@ -1,0 +1,183 @@
+---
+title: "Collection timepoint distribution"
+author: "Christian Santos-Medellin"
+---
+
+The only point of this notebook is to generate a plot that displays all the samples that were collected for this study. 
+This could be used as a supplementary figure that serves as reference to contextualize where the data for some analyses is coming from. 
+
+Load libraries
+```{r}
+source("../../General/general_functions.R")
+source("../../General/plotting_parameters.R")
+library(lubridate)
+library(cowplot)
+library(tidyverse)
+```
+
+Load data
+```{r}
+climate <- read.table("../Data/climate.tsv", header = T, sep = "\t") %>% 
+  mutate(Date = mdy(Date))
+
+soil.map <- readRDS("../Data/soil_map.RDS")
+
+map <- readRDS("../Data/dna_map.RDS") %>% 
+  mutate(SampleID = DNAID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat), by = "SoilID") 
+```
+
+Set some parameters for plotting
+```{r}
+# The min and max dates define the period that will be displayed for the plot
+min.date <- "2020-10-01"
+max.date <- "2022-03-01"
+
+# this data frame will be used to highlight each of the 3 years encompassed by the sampling campaign
+period.df <- tribble(
+  ~Period, ~PeriodLong, ~Start,  ~End, ~Mid,
+  "P1", "2020", min.date, "2020-12-31", "2020-11-15",
+  "P2", "2021", "2021-01-01", "2021-12-31", "2021-07-01",
+  "P3", "2022", "2022-01-01", max.date, "2022-02-01"
+) %>% 
+  mutate(StartDate = ymd(Start),
+         EndDate = ymd(End),
+         MidDate = ymd(Mid))
+
+# this vector contains the abbreviated months to display in the x axis 
+# NOTE that if you change the min and max dates, this vector will have to be updated
+year_labels <- c('O','N','D','J','F','M','A','M','J','J','A','S','O','N','D','J','F',"M")
+```
+
+Plot the precipitation patterns observed during the sampling period
+For this plot, I am displaying the actual max values observed in the study (which shrinks most of the trends given the record ppt we had at the end of 2021).
+An alternative version of this precipitation data with trimmed values is shown in the mound_vs_swale.Rmmd notebook 
+```{r}
+ppt.p <- climate %>% 
+  filter(Date > as.Date(min.date)) %>%
+  filter(Date < as.Date(max.date)) %>%
+  ggplot() +
+  geom_line(aes(Date, TotalPrecipitation)) +
+  geom_rect(data = period.df, aes(xmin = StartDate, xmax = EndDate + 1, 
+                                  ymin = -2, ymax = -7, 
+                                  fill = Period)) + 
+  geom_text(data = period.df, aes(x = MidDate, label = PeriodLong), y = -4.5, hjust = 0.5, vjust = 0.5) + 
+  geom_point(data = soil.map %>% filter(Study == "Temporal") %>% group_by(CollectionDate) %>% count(), aes(CollectionDate, - 8, color = as.factor(CollectionDate))) +
+  scale_color_manual(values = timepoint.pal) +
+  scale_fill_manual(values = c("gray25", "gray75", "gray25")) +
+  scale_x_date("Date",breaks = c(seq(from=as.Date(min.date),to=as.Date(max.date),by="month")),
+               labels = year_labels)  +
+  ylab("Daily rainfall\n(mm)") +
+  basic.theme() +
+  theme(legend.position = "none")
+
+ppt.p  
+```
+
+Plot a heatmap that shows how many replicates were generated for each sample type in each time point. 
+The plot also includes the color codes used for each time point
+```{r}
+# Create a data frame summarizing each collection time point and the associated date
+# The extra variables are just there so we can rbind them with the other data frames. 
+time.tmp <- soil.map %>% 
+  group_by(CollectionDate, Timepoint) %>% 
+  filter(Study == "Temporal") %>% 
+  count() %>% 
+  ungroup() %>% 
+  arrange(CollectionDate) %>% 
+  mutate(tmp = 1:n()) %>% 
+  mutate(Feature = "tmp",
+         Title = "tmp",
+         Profile2 = "tmp",
+         Replicates = "tmp") %>% 
+  select(CollectionDate, Timepoint, Feature, Title, Profile2, Replicates)
+
+# Create a data frame summarizing the number of sequenced profiles generated for each time point
+seq.tmp <- map %>% 
+  mutate(AmpliconSequenced = ifelse(AmpliconSequenced, "Yes", "No"),
+         WGSSequenced = ifelse(WGSSequenced, "Yes", "No")) %>% 
+  gather(key = "Profile", value = "Value", WGSSequenced, AmpliconSequenced) %>% 
+  group_by(Position, Feature, CollectionDate, Profile, Fraction, Value, DNase, SoilStatus, Study) %>% 
+  count() %>% 
+  ungroup() %>% 
+  spread(key = Value, value = n) %>% 
+  mutate(No = ifelse(is.na(No), 0, No),
+         Yes = ifelse(is.na(Yes), 0, Yes)) %>% 
+  filter(Study == "Temporal") %>% 
+  filter(!(Profile == "WGSSequenced" & Fraction == "Total")) %>% 
+  filter(!(Profile == "AmpliconSequenced" & DNase)) %>% 
+  mutate(DNase2 = ifelse(DNase, "+DNase", "Untreated")) %>% 
+  mutate(Fraction2 = ifelse(Fraction == "Viral", "0.22 µ DNA", "Total DNA")) %>% 
+  mutate(SoilStatus2 = ifelse(SoilStatus == "Fresh", "Fresh soil", "Frozen soil")) %>% 
+  mutate(Profile2 = ifelse(Profile == "AmpliconSequenced", "16S rRNA gene\nprofiles", "Virome\nprofiles")) %>% 
+  mutate(Title = paste0(SoilStatus2, "\n", Fraction2, " / ", DNase2)) %>% 
+  mutate(Replicates = as.factor(Yes)) %>% 
+  mutate(Timepoint = NA) %>% 
+  select(CollectionDate, Timepoint, Feature, Title, Profile2, Replicates)
+
+# Create a data frame summarizing the number of edaphic profiles generated for each time point
+nut.tmp <- soil.map %>% 
+  mutate(AbioticProfiled = !is.na(WardBatch)) %>% 
+  group_by(Position, Feature, CollectionDate, AbioticProfiled, Study) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(Replicates = ifelse(AbioticProfiled, n, 0) %>% as.factor()) %>% 
+  filter(Study == "Temporal") %>% 
+  mutate(Profile2 = "Soil nutrient\nprofiles") %>% 
+  mutate(Title = "Refrigerated soil") %>% 
+  mutate(Timepoint = NA) %>% 
+  select(CollectionDate, Timepoint, Feature, Title, Profile2, Replicates)
+
+# Bind data frames and plot
+samples.p <- rbind(time.tmp, seq.tmp, nut.tmp) %>% 
+  mutate(Title = fct_relevel(Title, "tmp", "Fresh soil\nTotal DNA / Untreated")) %>% 
+  mutate(Profile2 = fct_relevel(Profile2, "tmp", "Virome\nprofiles")) %>% 
+  ggplot(aes(as.factor(CollectionDate), Feature)) +
+  geom_tile(data = . %>% filter(Title == "tmp"), aes(fill = Timepoint), color = "black", size = 0.5) +
+  geom_text(data = . %>% filter(Title == "tmp"), aes(label = Timepoint), size = 2) + 
+  scale_fill_viridis_d(option = "C") +
+  geom_tile(data = . %>%  filter(Title != "tmp" & Replicates == "0"), color = "black", fill = rep.pal[1], size = 0.5) +
+  geom_tile(data = . %>%  filter(Title != "tmp" & Replicates == "1"), color = "black", fill = rep.pal[2], size = 0.5) +
+  geom_tile(data = . %>%  filter(Title != "tmp" & Replicates == "2"), color = "black", fill = rep.pal[3], size = 0.5) +
+  geom_tile(data = . %>%  filter(Title != "tmp" & Replicates == "3"), color = "black", fill = rep.pal[4], size = 0.5) +
+  geom_tile(data = . %>%  filter(Title != "tmp" & Replicates == "4"), color = "black", fill = rep.pal[5], size = 0.5) +
+  scale_color_viridis_d(option = "C") +
+  scale_x_discrete(position = "top") +
+  facet_grid(Profile2 + Title ~ ., scale = "free", space = "free") +
+  basic.theme() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title.y = element_blank(),
+        strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 0),
+        legend.position = "none")
+
+samples.p
+```
+
+Create a dummy plot that displays the legend for the replicate colors in the previous plot
+This is needed because I didn't use replicate fill color as an aesthetic since I used it for the time points.
+```{r}
+legend.p <- seq.tmp %>% 
+  ggplot(aes(as.factor(CollectionDate), Feature, fill = Replicates)) +
+  geom_tile(aes(fill = Replicates), color = "black", size = 0.5) +
+  scale_fill_manual(values = rep.pal) +
+  scale_x_discrete(position = "top") +
+  facet_grid(Profile2 + Title ~ ., scale = "free", space = "free") +
+  basic.theme() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title.y = element_blank(),
+        strip.text = element_text(size = 8),
+        strip.text.y = element_text(angle = 0),
+        legend.position = "bottom")
+
+legend.p
+```
+
+Put it all together
+800:600
+```{r}
+plot_grid(ppt.p, samples.p, ncol = 1, rel_heights = c(1,2), align = "v", axis = "lr")
+
+plot_grid(get_legend(legend.p))
+```
+

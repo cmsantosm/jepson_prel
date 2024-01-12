@@ -1,0 +1,240 @@
+---
+title: "iPHoP formatting"
+author: "Christian Santos-Medellin"
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+```
+
+Load data
+```{r}
+# Genome file
+genome <- read.csv("../Data/iphop/all_Host_prediction_to_genome_m90.csv") %>% 
+  mutate(Host.taxonomy = str_remove_all(Host.taxonomy, "\\w__")) %>% 
+  separate(Host.taxonomy, c("HostDomain", "HostPhylum", "HostClass", "HostOrder", "HostFamily", "HostGenus", "HostSpecies"), sep = ";")
+
+# Genus file
+genus <- read.csv("../Data/iphop/all_Host_prediction_to_genus_m90.csv") %>% 
+  mutate(Host.genus = str_remove_all(Host.genus, "\\w__")) %>% 
+  separate(Host.genus, c("HostDomain", "HostPhylum", "HostClass", "HostOrder", "HostFamily", "HostGenus"), sep = ";")
+```
+
+Reformat genome file
+For each taxonomic rank, label vOTUs with multiple predictions as "Mixed".
+Relabel entries with no assignment as "Unassigned"
+```{r}
+#Domain
+genome.domain <- genome %>%
+  group_by(Virus, HostDomain) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostDomain = ifelse(Total > 1, "Mixed", as.character(HostDomain))) %>% 
+  group_by(Virus, HostDomain) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Phylum
+genome.phylum <- genome %>%
+  group_by(Virus, HostPhylum) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostPhylum = ifelse(Total > 1, "Mixed", as.character(HostPhylum))) %>% 
+  group_by(Virus, HostPhylum) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Class
+genome.class <- genome %>%
+  group_by(Virus, HostClass) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostClass = ifelse(Total > 1, "Mixed", as.character(HostClass))) %>% 
+  group_by(Virus, HostClass) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Order
+genome.order <- genome %>%
+  group_by(Virus, HostOrder) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostOrder = ifelse(Total > 1, "Mixed", as.character(HostOrder))) %>% 
+  group_by(Virus, HostOrder) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Family
+genome.family <- genome %>%
+  group_by(Virus, HostFamily) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostFamily = ifelse(Total > 1, "Mixed", as.character(HostFamily))) %>% 
+  group_by(Virus, HostFamily) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Genus
+genome.genus <- genome %>%
+  group_by(Virus, HostGenus) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostGenus = ifelse(Total > 1, "Mixed", as.character(HostGenus))) %>% 
+  group_by(Virus, HostGenus) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Species
+genome.species <- genome %>%
+  group_by(Virus, HostSpecies) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostSpecies = ifelse(Total > 1, "Mixed", as.character(HostSpecies))) %>% 
+  group_by(Virus, HostSpecies) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+# Join tables and relabel unassigned vOTUs
+genome.master <- genome.domain %>% 
+  left_join(genome.phylum, by = "Virus") %>% 
+  left_join(genome.class, by = "Virus") %>% 
+  left_join(genome.order, by = "Virus") %>% 
+  left_join(genome.family, by = "Virus") %>% 
+  left_join(genome.genus, by = "Virus") %>% 
+  left_join(genome.species, by = "Virus") %>% 
+  mutate(HostDomain = ifelse(HostDomain == "", "Unassigned", HostDomain)) %>% 
+  mutate(HostPhylum = ifelse(HostPhylum == "", "Unassigned", HostPhylum)) %>% 
+  mutate(HostClass = ifelse(HostClass == "", "Unassigned", HostClass)) %>% 
+  mutate(HostOrder = ifelse(HostOrder == "", "Unassigned", HostOrder)) %>% 
+  mutate(HostFamily = ifelse(HostFamily == "", "Unassigned", HostFamily)) %>% 
+  mutate(HostGenus = ifelse(HostGenus == "", "Unassigned", HostGenus)) %>% 
+  mutate(HostSpecies = ifelse(HostSpecies == "", "Unassigned", HostSpecies))
+```
+
+Reformat genus file
+For each taxonomic rank, label vOTUs with multiple predictions as "Mixed".
+Relabel entries with no assignment as "Unassigned"
+```{r}
+#Domain
+genus.domain <- genus %>%
+  group_by(Virus, HostDomain) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostDomain = ifelse(Total > 1, "Mixed", as.character(HostDomain))) %>% 
+  group_by(Virus, HostDomain) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Phylum
+genus.phylum <- genus %>%
+  group_by(Virus, HostPhylum) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostPhylum = ifelse(Total > 1, "Mixed", as.character(HostPhylum))) %>% 
+  group_by(Virus, HostPhylum) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Class
+genus.class <- genus %>%
+  group_by(Virus, HostClass) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostClass = ifelse(Total > 1, "Mixed", as.character(HostClass))) %>% 
+  group_by(Virus, HostClass) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Order
+genus.order <- genus %>%
+  group_by(Virus, HostOrder) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostOrder = ifelse(Total > 1, "Mixed", as.character(HostOrder))) %>% 
+  group_by(Virus, HostOrder) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Family
+genus.family <- genus %>%
+  group_by(Virus, HostFamily) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostFamily = ifelse(Total > 1, "Mixed", as.character(HostFamily))) %>% 
+  group_by(Virus, HostFamily) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+#Genus
+genus.genus <- genus %>%
+  group_by(Virus, HostGenus) %>% 
+  count() %>% 
+  group_by(Virus) %>% 
+  mutate(Total = n()) %>% 
+  ungroup() %>% 
+  mutate(HostGenus = ifelse(Total > 1, "Mixed", as.character(HostGenus))) %>% 
+  group_by(Virus, HostGenus) %>% 
+  count() %>% 
+  ungroup() %>% 
+  select(-n) 
+
+# Join tables and relabel unassigned vOTUs
+genus.master <- genus.domain %>% 
+  left_join(genus.phylum, by = "Virus") %>% 
+  left_join(genus.class, by = "Virus") %>% 
+  left_join(genus.order, by = "Virus") %>% 
+  left_join(genus.family, by = "Virus") %>% 
+  left_join(genus.genus, by = "Virus") %>% 
+  mutate(HostDomain = ifelse(HostDomain == "", "Unassigned", HostDomain)) %>% 
+  mutate(HostPhylum = ifelse(HostPhylum == "", "Unassigned", HostPhylum)) %>% 
+  mutate(HostClass = ifelse(HostClass == "", "Unassigned", HostClass)) %>% 
+  mutate(HostOrder = ifelse(HostOrder == "", "Unassigned", HostOrder)) %>% 
+  mutate(HostFamily = ifelse(HostFamily == "", "Unassigned", HostFamily)) %>% 
+  mutate(HostGenus = ifelse(HostGenus == "", "Unassigned", HostGenus)) 
+```
+
+Save files into Analysis/Data folder
+```{r}
+saveRDS(genome.master, "../../Analysis/Data/iphop_genome_aggregated.RDS")
+saveRDS(genome, "../../Analysis/Data/iphop_genome_original.RDS")
+saveRDS(genus.master, "../../Analysis/Data/iphop_genus_aggregated.RDS")
+saveRDS(genus, "../../Analysis/Data/iphop_genus_original.RDS")
+```
+

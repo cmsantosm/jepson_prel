@@ -1,0 +1,57 @@
+---
+title: "Sequencing depth / rarefaction factor calculation"
+author: "Christian Santos-Medellin"
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+```
+
+Load data
+```{r}
+seq.depth.raw <- read.table("../Data/fastqc/parsed/cat_rmphix_basic_stats.txt", header = T, sep = "\t") %>% 
+  filter(Measure == "Total Sequences")
+
+map <- readRDS("../../Analysis/Data/dna_map.RDS")
+```
+
+Generate a table with the sequencing depths of all profiles
+```{r}
+seq.depth <- seq.depth.raw %>% 
+  separate(Library, c("DNAID", "ReadPair", "tmp1", "tmp2"), sep = "_") %>% 
+  mutate(Value = as.numeric(Value)) %>% 
+  group_by(DNAID) %>% 
+  summarise(total_depth_qual_reads = sum(Value),
+            paired_qual_reads = sum(Value)/2) 
+
+saveRDS(seq.depth, "../../Analysis/Data/seq_depth.RDS")
+```
+
+Inspect sequencing depths of viromes
+```{r}
+seq.depth %>% 
+  inner_join(map, by = "DNAID") %>% 
+  arrange(total_depth_qual_reads) 
+```
+
+Retrieve the minimum and median sequencing depths
+```{r}
+med.depth <- seq.depth$total_depth_qual_reads %>% median()
+min.depth <- seq.depth$total_depth_qual_reads %>% min()
+```
+
+Save table with sequencing depth info and the rarefaction factor used to subsample alignments
+```{r}
+min.rfactor <- seq.depth %>% 
+  mutate(RarefactionFactor = ifelse(total_depth_qual_reads <= min.depth, 1, min.depth/total_depth_qual_reads)) %>% 
+  select(DNAID, RarefactionFactor)
+
+med.rfactor <- seq.depth %>% 
+  mutate(RarefactionFactor = ifelse(total_depth_qual_reads <= med.depth, 1, med.depth/total_depth_qual_reads)) %>% 
+  select(DNAID, RarefactionFactor)
+        
+write.table(min.rfactor, "../Data/min_rarefaction_factor.tsv", quote = F, sep = "\t", row.names = F)
+write.table(med.rfactor, "../Data/med_rarefaction_factor.tsv", quote = F, sep = "\t", row.names = F)
+```
+

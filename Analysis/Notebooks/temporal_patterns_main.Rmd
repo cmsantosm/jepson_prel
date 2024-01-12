@@ -1,0 +1,293 @@
+---
+title: "Temporal patterns"
+author: "Christian Santos-Medellin"
+---
+
+This notebook focuses on the temporal trends observed in the main experiment
+
+Load libraries
+```{r}
+source("../../General/general_functions.R")
+source("../../General/plotting_parameters.R")
+library(lubridate)
+library(RColorBrewer)
+library(UpSetR)
+library(cowplot)
+library(broom)
+library(tidyverse)
+```
+
+Read files
+```{r}
+climate <- read.table("../Data/climate.tsv", header = T, sep = "\t") %>% 
+  mutate(Date = mdy(Date))
+
+soil.map <- readRDS("../Data/soil_map.RDS") %>% 
+  mutate(GSM = GSM*100) %>% 
+  mutate(GSM_max = ifelse(GSM > 30, 30, GSM)) %>% 
+  filter(Study == "Temporal")
+
+v.map <- readRDS("../Data/dna_map.RDS") %>% 
+  mutate(SampleID = DNAID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat, GSM_max), by = "SoilID") %>% 
+  filter(Study == "Temporal")
+
+b.map <- readRDS("../Data/dna_map.RDS") %>% 
+  mutate(SampleID = AmpliconID) %>% 
+  left_join(select(soil.map, SoilID, GSM:Na_Sat, GSM_max), by = "SoilID") %>% 
+  filter(Study == "Temporal")
+
+votu <- readRDS("../Data/rare_min_votu75_tmean.RDS")
+votu <- votu[, colSums(votu) > 0]
+votu <- votu[rowSums(votu) > 0, ]
+
+asv <- readRDS("../Data/amplicon_raremin_nsing_asv.RDS")
+asv <- asv[, colSums(asv) > 0]
+asv <- asv[rowSums(asv) > 0, ]
+
+extra.vars <- c("Lime", "Texture", "lbs", "H_Sat", "pH_Buffer", "Ca_Sat", "K_Sat", "Na_Sat", "Mg_Sat")
+
+soil.mtx <- soil.map %>% 
+  filter(Study == "Temporal") %>% 
+  filter(ProfileWard) %>% 
+  select(SoilID, pH_Soil:Na_Sat) %>% 
+  select(-extra.vars) %>% 
+  as.data.frame(row.names = .$SoilID) %>% 
+  select(-SoilID) %>% 
+  as.matrix()
+
+timepoint.levels <- soil.map %>% filter(str_detect(Timepoint, "T")) %>% .$Timepoint %>% sort() %>% unique()
+```
+
+Generate the subsets of viromes and amplicon profiles for different analyses
+```{r}
+# All viromes generated from fresh soils + the subset of viromes from frozen soils from time points with no associated fresh soil profile
+good.viromes <- v.map %>% 
+  filter(!is.na(WGSID)) %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(Fraction == "Viral") %>% 
+  filter(Study == "Temporal") %>% 
+  filter(SampleID %in% colnames(votu)) %>% 
+  select(SoilID, WGSID, DNase) %>% 
+  mutate(DNase = ifelse(DNase, "Yes", "No")) %>% 
+  spread(key = DNase, value = WGSID) %>% 
+  mutate(SampleID = ifelse(is.na(Yes), No, Yes)) %>% 
+  .$SampleID
+
+# All viromes generated from fresh soils
+dnase.viromes <- v.map %>% 
+  filter(!is.na(WGSID)) %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(Fraction == "Viral") %>% 
+  filter(DNase) %>% 
+  filter(SampleID %in% colnames(votu)) %>% 
+  .$SampleID
+
+# All total DNA amplicon profiles generated fresh soils
+fresh.total.amp <- b.map %>% 
+  filter(!is.na(AmpliconID)) %>% 
+  filter(Study == "Temporal") %>% 
+  filter(Fraction == "Total") %>% 
+  filter(SoilStatus == "Fresh") %>% 
+  filter(SampleID %in% colnames(asv)) %>% 
+  .$SampleID
+  
+# All viral-fraction DNA amplicon profiles generated from fresh soils + the subset of amplicon profiles from frozen soils from time points with no associated fresh soil profile
+good.vfrac.amp <- b.map %>% 
+  filter(!is.na(AmpliconID)) %>% 
+  filter(Study == "Temporal") %>% 
+  filter(Fraction == "Viral")  %>% 
+  filter(SampleID %in% colnames(asv)) %>% 
+  select(SoilID, AmpliconID, SoilStatus) %>% 
+  spread(key = SoilStatus, value = AmpliconID) %>% 
+  mutate(SampleID = ifelse(is.na(Fresh), Frozen, Fresh)) %>% 
+  .$SampleID
+```
+
+Calculate the Bray-Curtis dissimilarity matrix for both viromes and amplicon profiles
+The dissimilarity are calculated on log-transformed relative abundances but feel free to use your nromalization method of choice
+```{r}
+votu.norm <- votu %>% rel_ab() %>% log_norm()
+v.dist <- beta_div_dist(votu.norm)
+
+asv.norm <- asv %>% rel_ab() %>% log_norm()
+b.dist <- beta_div_dist(asv.norm)
+```
+
+Plot PCoAs colorcoded by location sampled
+The current version uses plots the first two coordinates, but just switch the number in the function calls to whatever coordinates are of interest
+```{r}
+plot_pcoa_timepoint <- function(dist, filt.map, x.axis, y.axis){
+    pcoa.df <- get_pcoa(dist, filt.map)
+  
+  plot_pcoa(pcoa.df, x.axis, y.axis) +
+    geom_point(aes(fill = Timepoint), size = 3, alpha = 0.8, shape = 21) +
+    scale_fill_manual(values = timepoint.pal, breaks = timepoint.levels, limits = timepoint.levels, drop = FALSE) +
+    basic.theme() +
+    theme(legend.position = "bottom")
+}
+
+# Mound vOTU profiles in all DNase-treated viromes + subset of untreated viromes 
+plot_pcoa_timepoint(v.dist, filter(v.map, SampleID %in% good.viromes  & Feature == "Mound"), 1, 2)
+# Swale vOTU profiles in all DNase-treated viromes + subset of untreated viromes 
+plot_pcoa_timepoint(v.dist, filter(v.map, SampleID %in% good.viromes  & Feature == "Swale"), 1, 2)
+
+# Mound vOTU profiles in all DNase-treated viromes
+plot_pcoa_timepoint(v.dist, filter(v.map, SampleID %in% dnase.viromes & Feature == "Mound"), 1, 2)
+# Swale vOTU profiles in all DNase-treated viromes 
+plot_pcoa_timepoint(v.dist, filter(v.map, SampleID %in% dnase.viromes & Feature == "Swale"), 1, 2)
+
+# Mound amplicon profiles in total DNA collected from fresh soils
+plot_pcoa_timepoint(b.dist, filter(b.map, SampleID %in% fresh.total.amp  & Feature == "Mound"), 1, 2)
+# Swale amplicon profiles in total DNA collected from fresh soils
+plot_pcoa_timepoint(b.dist, filter(b.map, SampleID %in% fresh.total.amp & Feature == "Swale"), 1, 2)
+
+# Mound amplicon profiles in viral fraction  DNA collected from fresh soils + subset of frozen soils
+plot_pcoa_timepoint(b.dist, filter(b.map, SampleID %in% good.vfrac.amp  & Feature == "Mound"), 1, 2)
+# Swale amplicon profiles in viral fraction  DNA collected from fresh soils + subset of frozen soils
+plot_pcoa_timepoint(b.dist, filter(b.map, SampleID %in% good.vfrac.amp & Feature == "Swale"), 1, 2)
+```
+
+Constrained analyses of principal coordinates to better visualize the location trend.
+Currently using the formula that constrains the information to the Timepoint metadata while controlling the variation due to location.
+```{r}
+plot_cap_timepoint <- function(dist, filt.map, x.axis, y.axis){
+  
+  dist <- as.matrix(dist)
+  filt.dist <- dist[match(filt.map$SampleID, rownames(dist)), match(filt.map$SampleID, colnames(dist))]
+  cap <- vegan::capscale(formula = as.dist(filt.dist) ~ Timepoint + Condition(Location), data = filt.map)
+#  cap <- vegan::capscale(formula = as.dist(filt.dist) ~ Timepoint, data = filt.map)
+  cap.summary <- summary(cap)
+  cap.df <- cbind(filt.map, cap.summary$sites)
+  cap.eig <- round(cap$CCA$eig/sum(cap$CCA$eig) * 100, digits = 2)
+  
+  cap.df %>% 
+    ggplot(aes(CAP1, CAP2)) +
+    geom_point(aes(fill = Timepoint), size = 3, alpha = 0.8, shape = 21) +
+    scale_fill_manual(values = timepoint.pal, breaks = timepoint.levels, limits = timepoint.levels, drop = FALSE) +
+    xlab(paste0("CAP", x.axis, " (", cap.eig[x.axis], "%)")) +
+    ylab(paste0("CAP", y.axis, " (", cap.eig[y.axis], "%)")) +
+    basic.theme() +
+    theme(legend.position = "bottom")
+}
+
+# Mound vOTU profiles in all DNase-treated viromes + subset of untreated viromes 
+plot_cap_timepoint(v.dist, filter(v.map, SampleID %in% good.viromes  & Feature == "Mound"), 1, 2)
+# Swale vOTU profiles in all DNase-treated viromes + subset of untreated viromes 
+plot_cap_timepoint(v.dist, filter(v.map, SampleID %in% good.viromes  & Feature == "Swale"), 1, 2)
+
+# Mound vOTU profiles in all DNase-treated viromes
+plot_cap_timepoint(v.dist, filter(v.map, SampleID %in% dnase.viromes & Feature == "Mound"), 1, 2)
+# Swale vOTU profiles in all DNase-treated viromes 
+plot_cap_timepoint(v.dist, filter(v.map, SampleID %in% dnase.viromes & Feature == "Swale"), 1, 2)
+
+# Mound amplicon profiles in total DNA collected from fresh soils
+plot_cap_timepoint(b.dist, filter(b.map, SampleID %in% fresh.total.amp  & Feature == "Mound"), 1, 2)
+# Swale amplicon profiles in total DNA collected from fresh soils
+plot_cap_timepoint(b.dist, filter(b.map, SampleID %in% fresh.total.amp & Feature == "Swale"), 1, 2)
+
+# Mound amplicon profiles in viral fraction  DNA collected from fresh soils + subset of frozen soils
+plot_cap_timepoint(b.dist, filter(b.map, SampleID %in% good.vfrac.amp  & Feature == "Mound"), 1, 2)
+# Swale amplicon profiles in viral fraction  DNA collected from fresh soils + subset of frozen soils
+plot_cap_timepoint(b.dist, filter(b.map, SampleID %in% good.vfrac.amp & Feature == "Swale"), 1, 2)
+```
+
+Plot the PCAs for the edaphic data
+```{r}
+plot_soil_timepoint_pca <- function(mtx, filt.map, x.axis, y.axis){
+  pca.res <- get_pca(mtx, filt.map)
+  plot_pca(pca.res, x.axis, y.axis) +
+    geom_point(aes(fill = Timepoint), size = 3, alpha = 0.8, shape = 21) +
+    scale_fill_manual(values = timepoint.pal, breaks = timepoint.levels, limits = timepoint.levels, drop = FALSE) +
+    basic.theme()
+}
+
+#Mound
+plot_soil_timepoint_pca(soil.mtx, filter(soil.map, Study == "Temporal" & Feature == "Mound") %>% mutate(SampleID = SoilID), 1, 2)
+#Swale
+plot_soil_timepoint_pca(soil.mtx, filter(soil.map, Study == "Temporal" & Feature == "Swale") %>% mutate(SampleID = SoilID), 1, 2)
+```
+
+Redundancy analyses to better visualize the location trend in the edaphic data.
+Currently using the formula that constrains the information to the Timepoint metadata while controlling the variation due to location. 
+```{r}
+plot_soil_timepoint_rda <- function(mtx, filt.map, x.axis, y.axis) {
+  filt.map <- filter(filt.map, SampleID %in% row.names(mtx))
+  filt.mtx <- mtx[match(filt.map$SoilID, row.names(mtx)),]
+  filt.mtx.z <- vegan::decostand(filt.mtx, method = "standardize")
+  
+  rda <- vegan::rda(filt.mtx.z ~ Timepoint + Condition(Location), data = filt.map)
+#  rda <- vegan::rda(filt.mtx.z ~ Timepoint, data = filt.map)
+  rda.summary <- summary(rda)
+  rda.df <- cbind(filt.map, rda.summary$sites)
+  rda.eig <- round(rda$CCA$eig/sum(rda$CCA$eig) * 100, digits = 2)
+  
+  rda.df %>% 
+  ggplot(aes(RDA1, RDA2)) +
+  geom_point(aes(fill = Timepoint), size = 3, alpha = 0.8, shape = 21) +
+  xlab(paste0("RDA", x.axis, " (", rda.eig[x.axis], "%)")) +
+  ylab(paste0("RDA", y.axis, " (", rda.eig[y.axis], "%)")) +
+  scale_fill_manual(values = timepoint.pal, breaks = timepoint.levels, limits = timepoint.levels, drop = FALSE) +
+  basic.theme() +
+  theme(legend.position = "bottom")
+}
+
+# Mound
+plot_soil_timepoint_rda(soil.mtx, filter(soil.map, Study == "Temporal" & Feature == "Mound") %>% mutate(SampleID = SoilID), 1, 2)
+# Swale
+plot_soil_timepoint_rda(soil.mtx, filter(soil.map, Study == "Temporal" & Feature == "Swale") %>% mutate(SampleID = SoilID), 1, 2)
+```
+
+
+Plot the trends of temporal distance vs (1) community dissimilarity for all profiles or (2) nutrient profile distances
+```{r}
+# Plotting function
+plot_temp_vs_dist <- function(dist, filt.map) {
+  
+  # Remove upper triangle to remove duplicated pairwise comparisons
+  dist <- as.matrix(dist)
+  dist[upper.tri(dist)] <- NA 
+  
+  dist %>% 
+    as.data.frame() %>% 
+    rownames_to_column("SampleID.x") %>% 
+    gather(key = "SampleID.y", value = "Distance", -SampleID.x) %>% 
+    inner_join(filt.map, by = c("SampleID.x" = "SampleID")) %>% 
+    inner_join(filt.map, by = c("SampleID.y" = "SampleID")) %>% 
+    filter(SampleID.x != SampleID.y) %>% 
+    filter(Feature.x ==  Feature.y) %>% 
+    filter(Location.x == Location.y) %>% 
+    mutate(TemporalDistance = abs(CollectionDate.x - CollectionDate.y)) %>% 
+    ggplot(aes(TemporalDistance, Distance)) +
+    geom_point(color = "gray25", alpha = 0.2) +
+    geom_smooth(method = "loess") +
+    xlab("Temporal distance (# days)") +
+    ylab("Bray-Curtis dissimilarity") +
+    facet_grid(Feature.x ~ ., scales = "free") +
+#    facet_grid(Feature.x ~ Location.x, scales = "free") +
+    basic.theme()
+}
+
+# vOTU profiles in all DNase-treated viromes + subset of untreated viromes 
+plot_temp_vs_dist(v.dist, filter(v.map, SampleID %in% good.viromes))
+
+# vOTU profiles in all DNase-treated viromes 
+plot_temp_vs_dist(v.dist, filter(v.map, SampleID %in% dnase.viromes))
+
+# amplicon profiles in total DNA collected from fresh soils
+plot_temp_vs_dist(b.dist, filter(b.map, SampleID %in% fresh.total.amp))
+
+# amplicon profiles in viral fraction  DNA collected from fresh soils + subset of frozen soils
+plot_temp_vs_dist(b.dist, filter(b.map, SampleID %in% good.vfrac.amp))
+
+# Edaphic profiles
+# get the points with data
+soil.map.filt <- soil.map %>% filter(SoilID %in% row.names(soil.mtx)) %>% mutate(SampleID = SoilID)
+# normalize variables
+soil.mtx.z <- soil.mtx[match(soil.map.filt$SoilID, row.names(soil.mtx)),] %>% vegan::decostand(method = "standardize")
+# calculate distance
+soil.dist <- dist(soil.mtx.z, method = "euclidean") %>% as.matrix()
+# plot
+plot_temp_vs_dist(soil.dist, soil.map.filt)
+```
+

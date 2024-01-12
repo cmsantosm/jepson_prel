@@ -1,0 +1,239 @@
+---
+title: "Mapping file generation"
+author: "Christian Santos-Medellin"
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+temporal.dna <- read.table("../Data/sample_files/temporal_dna.tsv", header = T, sep = "\t")
+spatial.dna <- read.table("../Data/sample_files/spatial_dna.tsv", header = T, sep = "\t")
+
+temporal.gsm <- read.table("../Data/sample_files/temporal_gsm.tsv", header = T, sep = "\t")
+spatial.gsm <- read.table("../Data/sample_files/spatial_gsm.tsv", header = T, sep = "\t")
+
+seq.libs <- rbind(read.table("../Data/sample_files/jep1_libIDs.txt", header = F, col.names = "LibraryID") %>% mutate(Batch = "raw1"),
+                  read.table("../Data/sample_files/jep2_libIDs.txt", header = F, col.names = "LibraryID") %>% mutate(Batch = "raw2"),
+                  read.table("../Data/sample_files/jep3_libIDs.txt", header = F, col.names = "LibraryID") %>% mutate(Batch = "raw3"),
+                  read.table("../Data/sample_files/jep4_libIDs.txt", header = F, col.names = "LibraryID") %>% mutate(Batch = "raw4"),
+                  read.table("../Data/sample_files/jep5_libIDs.txt", header = F, col.names = "LibraryID") %>% mutate(Batch = "raw5"),
+                  read.table("../Data/sample_files/jep6_libIDs.txt", header = F, col.names = "LibraryID") %>% mutate(Batch = "raw6"))
+
+ward <- read.table("../Data/sample_files/ward.tsv", header = T, sep = "\t") 
+
+amplicon.map <- readRDS("../Data/sample_files/amplicon_map.RDS")
+amplicon.map
+
+gps <- read.table("../Data/sample_files/mound_coordinates.txt", header = T, sep = "\t")
+```
+
+The files with all collected samples (regardless of profiling status) are the gsm tables so we'll use those as starting points
+```{r}
+temporal.gsm.tidy <- temporal.gsm %>% 
+  mutate(SampleID2 = str_replace(SampleID, "JEP0", "JEP")) %>% 
+  mutate(SampleID2 = str_replace(SampleID2, "JEP0", "JEP")) %>% 
+  mutate(GSM = (InitialWeight-FinalWeight)/FinalWeight) %>% 
+  rename("SoilID" = "SampleID2") %>% 
+  mutate(Study = "Temporal") %>% 
+  mutate(Mound = paste("T", Mount, sep = "")) %>% 
+  select(SoilID, Study, Mound, Position, CollectionDate, InitialWeight, FinalWeight, GSM) 
+
+spatial.gsm.tidy <- spatial.gsm %>% 
+  mutate(GSM = (InitialWeight-FinalWeight)/FinalWeight) %>% 
+  rename("SoilID" = "SampleID") %>% 
+  mutate(Study = "Spatial",
+         Position = "Top") %>% 
+  mutate(Mound = paste("S", Mount, sep = "")) %>% 
+  select(SoilID, Study, Mound, Position, CollectionDate, InitialWeight, FinalWeight, GSM) 
+
+gsm.tidy <- rbind(temporal.gsm.tidy, spatial.gsm.tidy)
+```
+
+```{r}
+seq.tidy <- seq.libs %>% 
+  separate(LibraryID, c("DNAID", "tmp1", "tmp2"), sep = "_", remove = F) %>% 
+  select(-tmp1, -tmp2) %>% 
+  spread(key = Batch, value = LibraryID)
+seq.tidy
+
+amplicon.tidy <- amplicon.map %>% 
+  mutate(DNAID = str_replace(Template, "JVN0", "JVN")) %>% 
+  mutate(DNAID = str_replace(DNAID, "JVN0", "JVN")) %>% 
+  mutate(DNAID = str_replace(DNAID, "JVD0", "JVD")) %>% 
+  mutate(DNAID = str_replace(DNAID, "JVD0", "JVD")) %>% 
+  mutate(DNAID = str_replace(DNAID, "JTM0", "JTM")) %>% 
+  mutate(DNAID = str_replace(DNAID, "JTM0", "JTM")) %>% 
+  mutate(DNAID = ifelse(SoilStatus == "Frozen", paste("F", DNAID, sep = ""), DNAID)) %>% 
+  mutate(DNAID = str_replace(DNAID, "f", "")) %>% 
+  rename("AmpliconID" = "SampleID") %>% 
+  select(DNAID, AmpliconID)
+```
+
+```{r}
+timepoint.tmp <- temporal.dna %>% 
+  mutate(CollectionDate = lubridate::mdy(CollectionDate)) %>% 
+  group_by(CollectionDate) %>% 
+  count() %>% 
+  ungroup() %>% 
+  arrange(CollectionDate) %>% 
+  mutate(tmp = 1:n()) %>% 
+  mutate(Timepoint = ifelse(tmp < 10, paste0("T0", tmp), paste0("T", tmp))) %>% 
+  select(CollectionDate, Timepoint)
+
+timepoint.tmp
+```
+
+
+```{r}
+temporal.dna.tidy <- temporal.dna %>% 
+  mutate(SoilID = str_replace(SampleID2, "JVN", "JEP")) %>% 
+  mutate(SoilID = str_replace(SoilID, "JVD", "JEP")) %>% 
+  mutate(SoilID = str_replace(SoilID, "f", "")) %>% 
+  mutate(Yield = ifelse(is.na(Yield), 0, Yield)) %>% 
+  mutate(Study = "Temporal") %>% 
+  mutate(Mound = paste("T", Mount, sep = "")) %>% 
+  mutate(DNase = DNase == "Yes") %>% 
+  rename("DNAID" = "SampleID2") %>% 
+  mutate(DNAID = ifelse(SoilStatus == "Frozen", paste("F", DNAID, sep = ""), DNAID)) %>% 
+  mutate(DNAID = str_replace(DNAID, "f", "")) %>% 
+  mutate(Fraction = "Viral") %>% 
+  select(DNAID, SoilID, Study, Mound, Position, CollectionDate, SoilStatus, Fraction, DNase, Yield)
+  
+spatial.dna.tidy <- spatial.dna %>% 
+  mutate(SoilID = str_replace(SampleID, "VD", "")) %>% 
+  rename("Yield" = "X") %>% 
+  mutate(Yield = ifelse(is.na(Yield), 0, Yield)) %>% 
+  mutate(Study = "Spatial") %>%
+  mutate(DNase = TRUE) %>% 
+  mutate(Position = "Top") %>% 
+  mutate(SoilStatus = "Fresh") %>% 
+  mutate(Mound = paste("S", Mount, sep = "")) %>% 
+  mutate(Fraction = "Viral") %>% 
+  rename("DNAID" = "SampleID") %>% 
+  select(DNAID, SoilID, Study, Mound, Position, CollectionDate, SoilStatus, Fraction, DNase, Yield)
+
+total.dna.tidy <- gsm.tidy %>% 
+  mutate(DNAID = SoilID) %>% 
+  mutate(DNAID = str_replace(DNAID, "JEP", "JTM")) %>% 
+  mutate(DNAID = str_replace(DNAID, "JTS", "JTSTM")) %>% 
+  mutate(DNase = FALSE) %>% 
+  mutate(Yield = NA) %>% 
+  mutate(SoilStatus = "Fresh") %>% 
+  mutate(Fraction = "Total") %>% 
+  select(DNAID, SoilID, Study, Mound, Position, CollectionDate, SoilStatus, Fraction, DNase, Yield)
+
+dna.tidy <- rbind(temporal.dna.tidy, spatial.dna.tidy, total.dna.tidy) %>% 
+  mutate(CollectionDate = lubridate::mdy(CollectionDate)) %>% 
+  mutate(WGSSequenced = DNAID %in% seq.tidy$DNAID,
+         AmpliconSequenced = DNAID %in% amplicon.tidy$DNAID) %>% 
+  mutate(WGSID = ifelse(WGSSequenced, DNAID, NA)) %>% 
+  left_join(amplicon.tidy, by = "DNAID") %>% 
+  select(DNAID, SoilID, WGSSequenced:AmpliconID, everything()) %>% 
+  rename("Location" = "Mound") %>% 
+  mutate(Feature = ifelse(Position == "Top", "Mound", "Swale")) %>% 
+  select(DNAID:Position, Feature, everything()) %>% 
+  left_join(timepoint.tmp, by = "CollectionDate") %>% 
+  mutate(Timepoint = ifelse(is.na(Timepoint), "Spatial", Timepoint)) %>% 
+  mutate(Location = paste0("L", Location))
+
+saveRDS(dna.tidy, "../../Analysis/Data/dna_map.RDS")
+```
+
+```{r}
+ward.tidy <- ward %>% 
+  rename("SoilID" = "SampleID2") %>% 
+  rename("WardBatch" = "Ward_Batch") %>% 
+  select(-Set, -SampleID) %>% 
+  mutate(Nitrate = str_replace(Nitrate, "< 0.1", "0")) %>% 
+  mutate(Nitrate = as.numeric(Nitrate)) 
+```
+
+
+```{r}
+soil.master <- gsm.tidy %>% 
+  mutate(ProfileV = SoilID %in% filter(dna.tidy, WGSSequenced)$SoilID) %>% 
+  mutate(ProfileVD = SoilID %in% filter(dna.tidy, WGSSequenced & DNase)$SoilID) %>% 
+  mutate(ProfileVNFresh = SoilID %in% filter(dna.tidy, WGSSequenced & !DNase & SoilStatus == "Fresh")$SoilID) %>% 
+  mutate(ProfileVNFrozen = SoilID %in% filter(dna.tidy, WGSSequenced & !DNase & SoilStatus == "Frozen")$SoilID) %>% 
+  mutate(ProfileA = SoilID %in% filter(dna.tidy, AmpliconSequenced)$SoilID) %>% 
+  mutate(ProfileATM = SoilID %in% filter(dna.tidy, AmpliconSequenced & Fraction == "Total")$SoilID) %>% 
+  mutate(ProfileAVNFresh = SoilID %in% filter(dna.tidy, AmpliconSequenced & Fraction == "Viral" & !DNase & SoilStatus == "Fresh")$SoilID) %>% 
+  mutate(ProfileAVNFrozen = SoilID %in% filter(dna.tidy, AmpliconSequenced & Fraction == "Viral" & !DNase & SoilStatus == "Frozen")$SoilID) %>% 
+  mutate(ProfileWard = SoilID %in% ward.tidy$SoilID) %>% 
+  select(SoilID:CollectionDate, ProfileV:ProfileWard, InitialWeight:GSM) %>% 
+  left_join(ward.tidy, by = "SoilID") %>% 
+  mutate(CollectionDate = lubridate::mdy(CollectionDate)) %>% 
+  left_join(timepoint.tmp, by = "CollectionDate") %>% 
+  mutate(Timepoint = ifelse(is.na(Timepoint), "Spatial", Timepoint)) %>% 
+  rename("Location" = "Mound") %>% 
+  mutate(Feature = ifelse(Position == "Top", "Mound", "Swale")) %>% 
+  select(SoilID:Position, Feature, Timepoint, everything()) %>% 
+  mutate(Location = paste0("L", Location))
+
+saveRDS(soil.master, "../../Analysis/Data/soil_map.RDS")
+```
+
+```{r}
+gps.tidy <- gps %>% 
+  mutate(Elevation = altitude..ft. * 0.3048) %>% 
+  rename("Latitude" = "latitude") %>% 
+  rename("Longitude" = "longitude") %>% 
+  select(Mound, Latitude, Longitude, Elevation) %>% 
+  mutate(Study = ifelse(str_detect(Mound, "S"), "Spatial", "Temporal")) %>% 
+  rename("Location" = "Mound") %>% 
+  mutate(Coordinates = paste(Latitude, "N", Longitude, "W")) %>% 
+  mutate(Coordinates = str_remove(Coordinates, "-")) %>% 
+  mutate(Location = paste0("L", Location))
+
+saveRDS(gps.tidy, "../../Analysis/Data/gps.RDS")
+```
+
+```{r}
+ncbi.samples <- soil.master %>% 
+  inner_join(select(gps.tidy, -Study), by = "Location") %>% 
+  rename("lat_lon" = "Coordinates") %>% 
+  mutate(elev = paste(Elevation, "m")) %>% 
+  mutate(organism = "unclassified sequences; metagenomes; ecological metagenomes; soil metagenome",
+         env_broad_scale = "grassland biome [ENVO:01000177]",
+         env_local_scale = "soil environment [ENVO:01001044]",
+         env_medium = "grassland soil[ENVO:00005750]",
+         geo_loc_name = "USA: California") %>% 
+  rename("collection_date" = "CollectionDate") %>% 
+  select(SoilID:collection_date, lat_lon:geo_loc_name, everything())
+```
+
+```{r}
+ncbi.fwd <- seq.libs %>% 
+  separate(LibraryID, c("DNAID", "tmp1", "tmp2"), sep = "_", remove = F) %>% 
+  select(-tmp1, -tmp2) %>% 
+  mutate(LibraryID = paste(LibraryID, "_R1_001.fastq.gz", sep = "")) %>% 
+  mutate(Batch = str_replace(Batch, "raw", "fwd")) %>% 
+  spread(key = Batch, value = LibraryID) 
+
+ncbi.rvs <- seq.libs %>% 
+  separate(LibraryID, c("DNAID", "tmp1", "tmp2"), sep = "_", remove = F) %>% 
+  select(-tmp1, -tmp2) %>% 
+  mutate(LibraryID = paste(LibraryID, "_R2_001.fastq.gz", sep = "")) %>% 
+  mutate(Batch = str_replace(Batch, "raw", "rvs")) %>% 
+  spread(key = Batch, value = LibraryID) 
+
+
+ncbi.libraries <- inner_join(ncbi.fwd, ncbi.rvs, by = "DNAID") %>% 
+  inner_join(select(dna.tidy, DNAID, SoilID), by = "DNAID") %>% 
+  rename("SampleID" = "SoilID") %>% 
+  mutate(Profile = case_when(str_detect(DNAID, "VD") ~ "DNase-treated virome of grassland soil",
+                             str_detect(DNAID, "VN") ~ "Non DNase-treated virome of grassland soil")) %>% 
+   mutate(Description = case_when(str_detect(DNAID, "VD") ~ "Viral-size-fractionation (0.22 um) of fresh soil samples followed by a Dnase incubation to remove extracellular DNA. DNA extraction was performed with the PowerSoil Pro kit (QIAGEN). Whole shotgun metagenomic library was built with the DNA Hyper Prep Kit (Kapa Biosystems-Roche)",
+                                  str_detect(DNAID, "F") ~ "Viral-size-fractionation (0.22 um) of frozen soil samples. DNA extraction was performed with the PowerSoil Pro kit (QIAGEN). Whole shotgun metagenomic library was built with the DNA Hyper Prep Kit (Kapa Biosystems-Roche)",
+                             str_detect(DNAID, "VN") ~ "Viral-size-fractionation (0.22 um) of fresh soil samples. DNA extraction was performed with the PowerSoil Pro kit (QIAGEN). Whole shotgun metagenomic library was built with the DNA Hyper Prep Kit (Kapa Biosystems-Roche)")) %>% 
+  arrange(Profile, DNAID) %>% 
+  select(SampleID, DNAID, Profile, Description, fwd1, rvs1, fwd2, rvs2, fwd3, rvs3, fwd4, rvs4, fwd5, rvs5, fwd6, rvs6)
+```
+
+```{r}
+write.table(ncbi.samples, "../Data/ncbi_files/ncbi_samples.tsv", append = F, quote = F, sep = "\t", row.names = F)
+write.table(ncbi.libraries, "../Data/ncbi_files/ncbi_libraries.tsv", append = F, quote = F, sep = "\t", row.names = F, na = "")
+```
+
